@@ -1,0 +1,186 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Create Account</title>
+
+    <link
+        rel="stylesheet"
+        href="assets/css/style.css?v=3"
+    >
+</head>
+
+<body>
+
+    <main class="auth-container">
+
+        <h1>Create Account</h1>
+
+        <form id="registerForm">
+
+            <input
+                type="text"
+                id="name"
+                placeholder="Full name"
+                autocomplete="name"
+                minlength="2"
+                maxlength="100"
+                required
+            >
+
+            <input
+                type="email"
+                id="email"
+                placeholder="Email address"
+                autocomplete="email"
+                maxlength="255"
+                required
+            >
+
+            <input
+                type="password"
+                id="password"
+                placeholder="Password"
+                autocomplete="new-password"
+                minlength="8"
+                maxlength="72"
+                required
+            >
+
+            <button
+                type="submit"
+                id="registerBtn"
+            >
+                Register
+            </button>
+
+            <p id="message"></p>
+
+        </form>
+
+        <p>
+            Already have an account?
+            <a href="login.html">
+                Login
+            </a>
+        </p>
+
+    </main>
+
+    <script>
+       
+    'use strict';
+
+    const form =
+        document.getElementById('registerForm');
+
+    const button =
+        document.getElementById('registerBtn');
+
+    const message =
+        document.getElementById('message');
+
+    form.addEventListener(
+        'submit',
+        async function (event) {
+
+            event.preventDefault();
+
+            button.disabled = true;
+            message.textContent =
+                'Creating account...';
+
+            const name =
+                document.getElementById('name').value.trim();
+
+            const email =
+                document.getElementById('email').value.trim();
+
+            const password =
+                document.getElementById('password').value;
+
+            if (password.length < 8) {
+                message.textContent =
+                    'Password must be at least 8 characters.';
+
+                button.disabled = false;
+
+                return;
+            }
+
+            try {
+
+                const response =
+                    await fetch(
+                        '/secure-jwt-auth/api/auth/register.php',
+                        {
+                            method: 'POST',
+
+                            headers: {
+                                'Content-Type':
+                                    'application/json',
+                                'Accept':
+                                    'application/json'
+                            },
+
+                            body: JSON.stringify({
+                                name: name,
+                                email: email,
+                                password: password
+                            }),
+
+                            cache: 'no-store'
+                        }
+                    );
+
+                const data =
+                    await response.json();
+
+                if (!response.ok) {
+                    throw new Error(
+                        data.message ||
+                        'Registration failed.'
+                    );
+                }
+
+                sessionStorage.setItem(
+                    'verification_email',
+                    email
+                );
+
+                message.textContent =
+                    data.message ||
+                    'Registration successful.';
+
+                window.location.href =
+                    'verify-email.html';
+
+            } catch (error) {
+
+                console.error(
+                    'Registration Error:',
+                    error
+                );
+
+                message.textContent =
+                    error.message ||
+                    'Unable to register.';
+
+                button.disabled = false;
+            }
+        }
+    );
+
+    </script>
+
+</body>
+
+</html>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Verify Email</title>
+
+    <link
+        rel="stylesheet"
+        href="assets/css/style.css"
+    >
+</head>
+
+<body>
+
+    <main class="auth-container">
+
+        <h1>Verify Email</h1>
+
+        <p>Enter the OTP sent to your email.</p>
+
+        <form id="verifyForm">
+
+            <input
+                type="text"
+                id="otp"
+                placeholder="Enter 6-digit OTP"
+                inputmode="numeric"
+                maxlength="6"
+                pattern="[0-9]{6}"
+                autocomplete="one-time-code"
+                required
+            >
+
+            <button
+                type="submit"
+                id="verifyBtn"
+            >
+                Verify Email
+            </button>
+
+            <p id="message"></p>
+
+        </form>
+
+    </main>
+
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/auth.js"></script>
+
+    <script>
+        const form =
+            document.getElementById(
+                'verifyForm'
+            );
+
+        const button =
+            document.getElementById(
+                'verifyBtn'
+            );
+
+        const message =
+            document.getElementById(
+                'message'
+            );
+
+        const otpInput =
+            document.getElementById(
+                'otp'
+            );
+
+        const email =
+            sessionStorage.getItem(
+                'verification_email'
+            );
+
+        /* Check email */
+
+        if (!email) {
+
+            window.location.replace(
+                'register.html'
+            );
+
+        }
+
+        /* Allow digits only */
+
+        otpInput.addEventListener(
+            'input',
+            function () {
+
+                this.value =
+                    this.value
+                        .replace(/\D/g, '')
+                        .slice(0, 6);
+
+            }
+        );
+
+        /* Verify Email */
+
+        form.addEventListener(
+            'submit',
+            async function (event) {
+
+                event.preventDefault();
+
+                const otp =
+                    otpInput.value.trim();
+
+                /* Validate OTP */
+
+                if (!/^\d{6}$/.test(otp)) {
+
+                    message.textContent =
+                        'Enter a valid 6-digit OTP.';
+
+                    return;
+                }
+
+                button.disabled = true;
+
+                message.textContent =
+                    'Verifying...';
+
+                try {
+
+                    const response =
+                        await verifyEmail(
+                            email,
+                            otp
+                        );
+
+                    const tokenData =
+                        response?.data;
+
+                    /* Check authentication tokens */
+
+                    if (
+                        !tokenData?.access_token ||
+                        !tokenData?.refresh_token
+                    ) {
+                        throw new Error(
+                            'Authentication tokens were not received.'
+                        );
+                    }
+
+                    /* Save tokens */
+
+                    saveTokens(
+                        tokenData
+                    );
+
+                    /* Remove verification data */
+
+                    sessionStorage.removeItem(
+                        'verification_email'
+                    );
+
+                    message.textContent =
+                        'Email verified. Login successful.';
+
+                    /* Open dashboard */
+
+                    window.setTimeout(
+                        function () {
+
+                            window.location.replace(
+                                'dashboard.html'
+                            );
+
+                        },
+                        300
+                    );
+
+                } catch (error) {
+
+                    message.textContent =
+                        error.message ||
+                        'Email verification failed.';
+
+                    button.disabled = false;
+
+                    otpInput.focus();
+                }
+
+            }
+        );
+    </script>
+
+</body>
+
+</html>

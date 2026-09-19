@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Login</title>
+
+    <link
+        rel="stylesheet"
+        href="assets/css/style.css"
+    >
+</head>
+
+<body>
+
+    <main class="auth-container">
+
+        <h1>Login</h1>
+
+        <form id="loginForm">
+
+            <input
+                type="email"
+                id="email"
+                placeholder="Email address"
+                autocomplete="email"
+                required
+            >
+
+            <input
+                type="password"
+                id="password"
+                placeholder="Password"
+                autocomplete="current-password"
+                required
+            >
+
+            <button
+                type="submit"
+                id="loginBtn"
+            >
+                Login
+            </button>
+
+            <p id="message"></p>
+
+        </form>
+
+        <p>
+            <a href="forgot-password.html">
+                Forgot Password?
+            </a>
+        </p>
+
+        <p>
+            New user?
+            <a href="register.html">
+                Create Account
+            </a>
+        </p>
+
+    </main>
+
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/auth.js"></script>
+
+    <script>
+        const form =
+            document.getElementById(
+                'loginForm'
+            );
+
+        const button =
+            document.getElementById(
+                'loginBtn'
+            );
+
+        const message =
+            document.getElementById(
+                'message'
+            );
+
+        form.addEventListener(
+            'submit',
+            async function (event) {
+
+                event.preventDefault();
+
+                button.disabled = true;
+
+                message.textContent =
+                    'Checking account...';
+
+                const email =
+                    document.getElementById(
+                        'email'
+                    ).value.trim();
+
+                const password =
+                    document.getElementById(
+                        'password'
+                    ).value;
+
+                try {
+
+                    const response =
+                        await loginUser(
+                            email,
+                            password
+                        );
+
+                    sessionStorage.setItem(
+                        'login_email',
+                        email
+                    );
+
+                    message.textContent =
+                        response.message;
+
+                    setTimeout(
+                        function () {
+                            window.location.href =
+                                'verify-login.html';
+                        },
+                        700
+                    );
+
+                } catch (error) {
+
+                    message.textContent =
+                        error.message;
+
+                    button.disabled = false;
+                }
+            }
+        );
+    </script>
+
+</body>
+
+</html>

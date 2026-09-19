@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Verify Login</title>
+
+    <link
+        rel="stylesheet"
+        href="assets/css/style.css"
+    >
+</head>
+
+<body>
+
+    <main class="auth-container">
+
+        <h1>Verify Login</h1>
+
+        <p>Enter the OTP sent to your email.</p>
+
+        <form id="verifyLoginForm">
+
+            <input
+                type="text"
+                id="otp"
+                placeholder="Enter 6-digit OTP"
+                inputmode="numeric"
+                maxlength="6"
+                pattern="[0-9]{6}"
+                autocomplete="one-time-code"
+                required
+            >
+
+            <button
+                type="submit"
+                id="verifyBtn"
+            >
+                Verify Login
+            </button>
+
+            <p id="message"></p>
+
+        </form>
+
+    </main>
+
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/auth.js"></script>
+
+    <script>
+        const form =
+            document.getElementById(
+                'verifyLoginForm'
+            );
+
+        const button =
+            document.getElementById(
+                'verifyBtn'
+            );
+
+        const message =
+            document.getElementById(
+                'message'
+            );
+
+        const otpInput =
+            document.getElementById(
+                'otp'
+            );
+
+        const email =
+            sessionStorage.getItem(
+                'login_email'
+            );
+
+        /* Check email */
+
+        if (!email) {
+
+            window.location.replace(
+                'login.html'
+            );
+
+        }
+
+        /* Allow digits only */
+
+        otpInput.addEventListener(
+            'input',
+            function () {
+
+                this.value =
+                    this.value
+                        .replace(/\D/g, '')
+                        .slice(0, 6);
+
+            }
+        );
+
+        /* Verify Login */
+
+        form.addEventListener(
+            'submit',
+            async function (event) {
+
+                event.preventDefault();
+
+                const otp =
+                    otpInput.value.trim();
+
+                /* Validate OTP */
+
+                if (!/^\d{6}$/.test(otp)) {
+
+                    message.textContent =
+                        'Enter a valid 6-digit OTP.';
+
+                    return;
+                }
+
+                button.disabled = true;
+
+                message.textContent =
+                    'Verifying...';
+
+                try {
+
+                    await verifyLogin(
+                        email,
+                        otp
+                    );
+
+                    /* Remove login challenge */
+
+                    sessionStorage.removeItem(
+                        'login_email'
+                    );
+
+                    message.textContent =
+                        'Login successful.';
+
+                    window.setTimeout(
+                        function () {
+
+                            window.location.replace(
+                                'dashboard.html'
+                            );
+
+                        },
+                        300
+                    );
+
+                } catch (error) {
+
+                    message.textContent =
+                        error.message ||
+                        'Verification failed.';
+
+                    button.disabled = false;
+
+                    otpInput.focus();
+                }
+
+            }
+        );
+    </script>
+
+</body>
+
+</html>
