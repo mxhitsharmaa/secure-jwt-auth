@@ -1,3 +1,4 @@
+
 <?php
 
 require_once __DIR__ . '/../../config/bootstrap.php';
@@ -11,12 +12,17 @@ require_once __DIR__ . '/../otp/mail_service.php';
 
 try {
 
-    /* Security */
+    /* -------------------------------------------------
+       Security
+    ------------------------------------------------- */
 
     applyApiSecurity();
     requireSecureConnection();
 
-    /* Request Method */
+
+    /* -------------------------------------------------
+       Request Method
+    ------------------------------------------------- */
 
     if (
         ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST'
@@ -30,51 +36,77 @@ try {
     }
 
 
-/* Request Data */
+    /* -------------------------------------------------
+       Request Data
+    ------------------------------------------------- */
 
-$input = getJsonInput();
+    $input = getJsonInput();
 
-/* Required Fields */
 
-if (
-    !array_key_exists('name', $input) ||
-    !array_key_exists('email', $input) ||
-    !array_key_exists('password', $input)
-) {
-    throw new InvalidArgumentException(
-        'Name, email and password are required.'
+    /* -------------------------------------------------
+       Required Fields
+    ------------------------------------------------- */
+
+    if (
+        !array_key_exists('name', $input) ||
+        !array_key_exists('email', $input) ||
+        !array_key_exists('password', $input)
+    ) {
+        throw new InvalidArgumentException(
+            'Name, email and password are required.'
+        );
+    }
+
+
+    /* -------------------------------------------------
+       Validate Name
+    ------------------------------------------------- */
+
+    $name = validateName(
+        $input['name']
     );
-}
 
-/* Validate Name */
 
-$name = validateName(
-    $input['name']
-);
+    /* -------------------------------------------------
+       Validate Email
+    ------------------------------------------------- */
 
-/* Validate Email */
+    $email = validateEmail(
+        $input['email']
+    );
 
-$email = validateEmail(
-    $input['email']
-);
 
-/* Validate Password */
+    /* -------------------------------------------------
+       Validate Password
+    ------------------------------------------------- */
 
-$password = validatePassword(
-    $input['password'],
-    $securityConfig['password']['min_length'],
-    $securityConfig['password']['max_length']
-);
-    /* Client IP */
+    $password = validatePassword(
+        $input['password'],
+        $securityConfig['password']['min_length'],
+        $securityConfig['password']['max_length']
+    );
+
+
+    /* -------------------------------------------------
+       Client IP
+    ------------------------------------------------- */
 
     $ipAddress = getClientIp();
 
-    /* Email Rate Limit */
+
+    /* -------------------------------------------------
+       Email Rate Limit Key
+    ------------------------------------------------- */
 
     $emailRateKey = hash(
         'sha256',
         $email
     );
+
+
+    /* -------------------------------------------------
+       Registration Rate Limits
+    ------------------------------------------------- */
 
     checkRequestRateLimit(
         $conn,
@@ -94,7 +126,10 @@ $password = validatePassword(
         900
     );
 
-    /* OTP Security */
+
+    /* -------------------------------------------------
+       OTP Security
+    ------------------------------------------------- */
 
     $otpSecurity = checkOtpResendAllowed(
         $conn,
@@ -111,8 +146,7 @@ $password = validatePassword(
         );
 
         header(
-            'Retry-After: ' .
-            $retryAfter
+            'Retry-After: ' . $retryAfter
         );
 
         if (
@@ -125,7 +159,7 @@ $password = validatePassword(
                 null,
                 [
                     'email' => $emailRateKey,
-                    'retry_after' => $retryAfter,
+                    'retry_after' => $retryAfter
                 ]
             );
 
@@ -134,7 +168,7 @@ $password = validatePassword(
                 429,
                 [
                     'otp_blocked' => true,
-                    'retry_after' => $retryAfter,
+                    'retry_after' => $retryAfter
                 ]
             );
         }
@@ -144,12 +178,15 @@ $password = validatePassword(
             429,
             [
                 'otp_blocked' => false,
-                'retry_after' => $retryAfter,
+                'retry_after' => $retryAfter
             ]
         );
     }
 
-    /* Find Existing User */
+
+    /* -------------------------------------------------
+       Find Existing User
+    ------------------------------------------------- */
 
     $stmt = $conn->prepare(
         'SELECT
@@ -191,7 +228,10 @@ $password = validatePassword(
 
     $stmt->close();
 
-    /* Existing Account */
+
+    /* -------------------------------------------------
+       Existing Account
+    ------------------------------------------------- */
 
     if ($userExists) {
 
@@ -199,7 +239,7 @@ $password = validatePassword(
             'registration_existing_email',
             null,
             [
-                'email' => $emailRateKey,
+                'email' => $emailRateKey
             ]
         );
 
@@ -210,7 +250,10 @@ $password = validatePassword(
         );
     }
 
-    /* Password Hash */
+
+    /* -------------------------------------------------
+       Password Hash
+    ------------------------------------------------- */
 
     $passwordHash = password_hash(
         $password,
@@ -226,7 +269,10 @@ $password = validatePassword(
         );
     }
 
-    /* Registration Lock */
+
+    /* -------------------------------------------------
+       Registration Lock
+    ------------------------------------------------- */
 
     $registrationLockKey = hash(
         'sha256',
@@ -241,16 +287,22 @@ $password = validatePassword(
         10
     );
 
+
     $userId = null;
     $otp = null;
 
     try {
 
-        /* Transaction */
+        /* ---------------------------------------------
+           Transaction
+        --------------------------------------------- */
 
         $conn->begin_transaction();
 
-        /* Lock Email */
+
+        /* ---------------------------------------------
+           Lock Email
+        --------------------------------------------- */
 
         $stmt = $conn->prepare(
             'SELECT
@@ -293,7 +345,10 @@ $password = validatePassword(
 
         $stmt->close();
 
-        /* Concurrent Registration */
+
+        /* ---------------------------------------------
+           Concurrent Registration
+        --------------------------------------------- */
 
         if ($existingAfterLock) {
 
@@ -313,7 +368,10 @@ $password = validatePassword(
             );
         }
 
-        /* Create User */
+
+        /* ---------------------------------------------
+           Create User
+        --------------------------------------------- */
 
         $stmt = $conn->prepare(
             'INSERT INTO users
@@ -336,8 +394,15 @@ $password = validatePassword(
             );
         }
 
+
         $role = 'user';
+
+        /*
+         * Account remains pending until email OTP
+         * verification is completed.
+         */
         $status = 'pending';
+
 
         $stmt->bind_param(
             'sssss',
@@ -348,6 +413,7 @@ $password = validatePassword(
             $status
         );
 
+
         if (!$stmt->execute()) {
 
             $stmt->close();
@@ -357,9 +423,11 @@ $password = validatePassword(
             );
         }
 
+
         $userId = (int) $conn->insert_id;
 
         $stmt->close();
+
 
         if ($userId < 1) {
             throw new RuntimeException(
@@ -367,7 +435,10 @@ $password = validatePassword(
             );
         }
 
-        /* Create Verification OTP */
+
+        /* ---------------------------------------------
+           Create Verification OTP
+        --------------------------------------------- */
 
         $otp = createOtp(
             $conn,
@@ -375,7 +446,10 @@ $password = validatePassword(
             'email_verification'
         );
 
-        /* Commit */
+
+        /* ---------------------------------------------
+           Commit
+        --------------------------------------------- */
 
         if (!$conn->commit()) {
             throw new RuntimeException(
@@ -390,6 +464,7 @@ $password = validatePassword(
         } catch (Throwable) {
         }
 
+
         releaseRequestLock(
             $conn,
             'registration',
@@ -397,19 +472,23 @@ $password = validatePassword(
             'create-account'
         );
 
+
         securityLog(
             'registration_failed',
             null,
             [
                 'reason' =>
-                    'registration_transaction_failed',
+                    'registration_transaction_failed'
             ]
         );
 
         throw $e;
     }
 
-    /* Send Verification Email */
+
+    /* -------------------------------------------------
+       Send Verification Email
+    ------------------------------------------------- */
 
     try {
 
@@ -421,7 +500,9 @@ $password = validatePassword(
 
     } catch (Throwable $e) {
 
-        /* Invalidate OTP */
+        /* ---------------------------------------------
+           Invalidate OTP if email delivery fails
+        --------------------------------------------- */
 
         $stmt = $conn->prepare(
             'UPDATE otp_codes
@@ -446,13 +527,15 @@ $password = validatePassword(
             $stmt->close();
         }
 
+
         securityLog(
             'registration_email_failed',
             $userId,
             [
-                'email' => $emailRateKey,
+                'email' => $emailRateKey
             ]
         );
+
 
         releaseRequestLock(
             $conn,
@@ -461,13 +544,17 @@ $password = validatePassword(
             'create-account'
         );
 
+
         errorResponse(
             'Registration could not be completed. Please try again later.',
             500
         );
     }
 
-    /* Record OTP Sent */
+
+    /* -------------------------------------------------
+       Record OTP Sent
+    ------------------------------------------------- */
 
     recordOtpSent(
         $conn,
@@ -476,7 +563,10 @@ $password = validatePassword(
         'email_verification'
     );
 
-    /* Audit */
+
+    /* -------------------------------------------------
+       Audit
+    ------------------------------------------------- */
 
     securityLog(
         'registration_created',
@@ -487,11 +577,14 @@ $password = validatePassword(
         'registration_otp_sent',
         $userId,
         [
-            'email' => $emailRateKey,
+            'email' => $emailRateKey
         ]
     );
 
-    /* Release Lock */
+
+    /* -------------------------------------------------
+       Release Registration Lock
+    ------------------------------------------------- */
 
     releaseRequestLock(
         $conn,
@@ -500,7 +593,10 @@ $password = validatePassword(
         'create-account'
     );
 
-    /* Response */
+
+    /* -------------------------------------------------
+       Response
+    ------------------------------------------------- */
 
     successResponse(
         'Registration successful. Please verify your email.',
@@ -514,10 +610,11 @@ $password = validatePassword(
                 (int) getOtpSecurityLimits()['resend_cooldown'],
 
             'max_otp_sends' =>
-                (int) getOtpSecurityLimits()['max_resends'],
+                (int) getOtpSecurityLimits()['max_resends']
         ],
         201
     );
+
 
 } catch (InvalidArgumentException $e) {
 
@@ -526,17 +623,20 @@ $password = validatePassword(
         422
     );
 
-}catch (Throwable $e) {
+
+} catch (Throwable $e) {
 
     error_log(
         '[REGISTER] ' .
         $e->getMessage()
     );
 
+
     if (
         ($appConfig['environment'] ?? 'local')
         === 'local'
     ) {
+
         errorResponse(
             'Registration error: ' .
             $e->getMessage(),
@@ -544,9 +644,9 @@ $password = validatePassword(
         );
     }
 
+
     errorResponse(
         'Unable to process registration.',
         500
     );
-
 }
