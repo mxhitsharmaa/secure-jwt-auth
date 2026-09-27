@@ -12,70 +12,26 @@ require_once __DIR__ . '/otp_service.php';
 
 try {
 
-    /* Security */
-
     applyApiSecurity();
     requireSecureConnection();
 
-    /* Method */
-
-    if (
-        ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST'
-    ) {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
         header('Allow: POST');
-
-        errorResponse(
-            'HTTP method not allowed.',
-            405
-        );
+        errorResponse('HTTP method not allowed.', 405);
     }
 
-    /* JSON Input */
+    $input = getJsonInput();
 
-    $input =
-        getJsonInput();
+    validateAllowedFields($input, ['email', 'otp']);
 
-    /* Allowed Fields */
+    $email = validateEmail($input['email'] ?? null);
+    $otp   = validateOtp($input['otp'] ?? null);
 
-    validateAllowedFields(
-        $input,
-        [
-            'email',
-            'otp',
-        ]
-    );
+    $ipAddress = getClientIp();
 
-    /* Validate Email */
+    $otpSecurityPurpose = 'login_otp';
 
-    $email =
-        validateEmail(
-            $input['email'] ?? null
-        );
-
-    /* Validate OTP */
-
-    $otp =
-        validateOtp(
-            $input['otp'] ?? null
-        );
-
-    /* Client IP */
-
-    $ipAddress =
-        getClientIp();
-
-    /* OTP Security Purpose */
-
-    $otpSecurityPurpose =
-        'login_otp';
-
-    /* Request Rate Limits */
-
-    $emailRateKey =
-        hash(
-            'sha256',
-            $email
-        );
+    $emailRateKey = hash('sha256', $email);
 
     checkRequestRateLimit(
         $conn,
@@ -95,41 +51,30 @@ try {
         900
     );
 
-    /* OTP Security Block */
-
-    $otpBlock =
-        checkOtpBlock(
-            $conn,
-            $email,
-            $ipAddress,
-            $otpSecurityPurpose
-        );
+    $otpBlock = checkOtpBlock(
+        $conn,
+        $email,
+        $ipAddress,
+        $otpSecurityPurpose
+    );
 
     if ($otpBlock['blocked']) {
 
-        securityLog(
-            'login_otp_blocked',
-            null,
-            [
-                'email' =>
-                    $emailRateKey,
-
-                'retry_after' =>
-                    $otpBlock['retry_after'],
-            ]
-        );
+        securityLog('login_otp_blocked', null, [
+            'email'       => $emailRateKey,
+            'retry_after' => $otpBlock['retry_after'],
+        ]);
 
         errorResponse(
-            'Too many OTP attempts. No OTP will be sent for the next 15 minutes.',
+            'Too many OTP attempts. Try again later.',
             429,
-            [
-                'retry_after' =>
-                    $otpBlock['retry_after'],
-            ]
+            ['retry_after' => $otpBlock['retry_after']]
         );
     }
 
-    /* Find User */
+    /* -------------------------------------------------
+       Find User (with locked_until)
+    ------------------------------------------------- */
 
     $stmt = $conn->prepare(
         'SELECT
@@ -139,30 +84,22 @@ try {
             role,
             status,
             token_version,
-            email_verified_at
+            email_verified_at,
+            locked_until
          FROM users
          WHERE email = ?
          LIMIT 1'
     );
 
     if ($stmt === false) {
-        throw new RuntimeException(
-            'Unable to prepare user lookup.'
-        );
+        throw new RuntimeException('Unable to prepare user lookup.');
     }
 
-    $stmt->bind_param(
-        's',
-        $email
-    );
+    $stmt->bind_param('s', $email);
 
     if (!$stmt->execute()) {
-
         $stmt->close();
-
-        throw new RuntimeException(
-            'Unable to verify login.'
-        );
+        throw new RuntimeException('Unable to verify login.');
     }
 
     $stmt->bind_result(
@@ -172,37 +109,53 @@ try {
         $userRole,
         $userStatus,
         $userTokenVersion,
-        $userEmailVerifiedAt
+        $userEmailVerifiedAt,
+        $userLockedUntil
     );
 
-    $found =
-        $stmt->fetch();
-
+    $found = $stmt->fetch();
     $stmt->close();
-
-    /* User Not Found */
 
     if (!$found) {
 
-        securityLog(
-            'login_otp_invalid_request',
-            null,
-            [
-                'email' =>
-                    $emailRateKey,
-            ]
-        );
+        securityLog('login_otp_invalid_request', null, [
+            'email' => $emailRateKey,
+        ]);
 
-        errorResponse(
-            'Invalid verification request.',
-            401
-        );
+        errorResponse('Invalid verification request.', 401);
     }
 
-    $userId =
-        (int) $userId;
+    $userId = (int) $userId;
 
-    /* Request Lock */
+    /* -------------------------------------------------
+       Locked Check
+    ------------------------------------------------- */
+
+    if ($userLockedUntil !== null) {
+
+        $lockedUntilTs = strtotime($userLockedUntil);
+
+        if ($lockedUntilTs !== false && $lockedUntilTs > time()) {
+
+            $retryAfter = $lockedUntilTs - time();
+
+            header('Retry-After: ' . $retryAfter);
+
+            securityLog('login_locked', $userId, [
+                'retry_after' => $retryAfter,
+            ]);
+
+            errorResponse(
+                'Account temporarily locked. Try again later.',
+                423,
+                ['retry_after' => $retryAfter]
+            );
+        }
+    }
+
+    /* -------------------------------------------------
+       Request Lock
+    ------------------------------------------------- */
 
     acquireRequestLock(
         $conn,
@@ -212,16 +165,16 @@ try {
         10
     );
 
-    $accessToken = null;
+    $accessToken  = null;
     $refreshToken = null;
-    $refreshJti = null;
-    $familyId = null;
+    $refreshJti   = null;
+    $familyId     = null;
 
     try {
 
-        /* Transaction */
-
         $conn->begin_transaction();
+
+        global $jwtConfig;
 
         /* Lock User */
 
@@ -233,7 +186,8 @@ try {
                 role,
                 status,
                 token_version,
-                email_verified_at
+                email_verified_at,
+                locked_until
              FROM users
              WHERE id = ?
              LIMIT 1
@@ -241,23 +195,14 @@ try {
         );
 
         if ($stmt === false) {
-            throw new RuntimeException(
-                'Unable to lock user account.'
-            );
+            throw new RuntimeException('Unable to lock user account.');
         }
 
-        $stmt->bind_param(
-            'i',
-            $userId
-        );
+        $stmt->bind_param('i', $userId);
 
         if (!$stmt->execute()) {
-
             $stmt->close();
-
-            throw new RuntimeException(
-                'Unable to lock user account.'
-            );
+            throw new RuntimeException('Unable to lock user account.');
         }
 
         $stmt->bind_result(
@@ -267,83 +212,62 @@ try {
             $lockedRole,
             $lockedStatus,
             $lockedTokenVersion,
-            $lockedEmailVerifiedAt
+            $lockedEmailVerifiedAt,
+            $lockedLockedUntil
         );
 
-        $userFound =
-            $stmt->fetch();
-
+        $userFound = $stmt->fetch();
         $stmt->close();
 
-        /* Validate User */
-
-        if (
-            !$userFound ||
-            (int) $lockedUserId !== $userId
-        ) {
-            throw new RuntimeException(
-                'Invalid verification request.'
-            );
+        if (!$userFound || (int) $lockedUserId !== $userId) {
+            throw new RuntimeException('Invalid verification request.');
         }
 
-        /* Token Version */
-
-        if (
-            (int) $lockedTokenVersion < 1
-        ) {
-            throw new RuntimeException(
-                'Invalid token version.'
-            );
+        if ((int) $lockedTokenVersion < 1) {
+            throw new RuntimeException('Invalid token version.');
         }
 
-        /* Account Status */
+        if ($lockedLockedUntil !== null) {
 
-        if (
-            $lockedStatus === 'blocked'
-        ) {
-            throw new RuntimeException(
-                'Account is blocked.'
-            );
+            $lockedTs = strtotime($lockedLockedUntil);
+
+            if ($lockedTs !== false && $lockedTs > time()) {
+
+                $retryAfter = $lockedTs - time();
+
+                throw new RuntimeException(
+                    'Account temporarily locked. Try again later. Retry after: ' .
+                    $retryAfter
+                );
+            }
         }
 
-        if (
-            $lockedStatus === 'suspended'
-        ) {
-            throw new RuntimeException(
-                'Account is suspended.'
-            );
+        if ($lockedStatus === 'blocked') {
+            throw new RuntimeException('Account is blocked.');
         }
 
-        if (
-            $lockedStatus !== 'active'
-        ) {
-            throw new RuntimeException(
-                'Account is not active.'
-            );
+        if ($lockedStatus === 'suspended') {
+            throw new RuntimeException('Account is suspended.');
         }
 
-        /* Email Verification */
-
-        if (
-            $lockedEmailVerifiedAt === null
-        ) {
-            throw new RuntimeException(
-                'Email verification is required.'
-            );
+        if ($lockedStatus !== 'active') {
+            throw new RuntimeException('Account is not active.');
         }
 
-        /* Recheck OTP Security Block */
+        if ($lockedEmailVerifiedAt === null) {
+            throw new RuntimeException('Email verification is required.');
+        }
 
-        $otpBlock =
-            checkOtpBlock(
-                $conn,
-                $lockedEmail,
-                $ipAddress,
-                $otpSecurityPurpose
-            );
+        /* Recheck OTP Block */
+
+        $otpBlock = checkOtpBlock(
+            $conn,
+            $lockedEmail,
+            $ipAddress,
+            $otpSecurityPurpose
+        );
 
         if ($otpBlock['blocked']) {
-
             throw new RuntimeException(
                 'OTP verification is temporarily blocked.'
             );
@@ -351,8 +275,7 @@ try {
 
         /* Lock Latest OTP */
 
-        $purpose =
-            'login';
+        $purpose = 'login';
 
         $stmt = $conn->prepare(
             'SELECT
@@ -371,24 +294,14 @@ try {
         );
 
         if ($stmt === false) {
-            throw new RuntimeException(
-                'Unable to prepare OTP lookup.'
-            );
+            throw new RuntimeException('Unable to prepare OTP lookup.');
         }
 
-        $stmt->bind_param(
-            'is',
-            $userId,
-            $purpose
-        );
+        $stmt->bind_param('is', $userId, $purpose);
 
         if (!$stmt->execute()) {
-
             $stmt->close();
-
-            throw new RuntimeException(
-                'Unable to retrieve OTP.'
-            );
+            throw new RuntimeException('Unable to retrieve OTP.');
         }
 
         $stmt->bind_result(
@@ -400,67 +313,38 @@ try {
             $consumedAt
         );
 
-        $otpFound =
-            $stmt->fetch();
-
+        $otpFound = $stmt->fetch();
         $stmt->close();
 
-        /* OTP Missing */
-
         if (!$otpFound) {
-
-            throw new RuntimeException(
-                'Invalid or expired verification code.'
-            );
+            throw new RuntimeException('Invalid or expired verification code.');
         }
-
-        /* OTP Consumed */
 
         if ($consumedAt !== null) {
-
-            throw new RuntimeException(
-                'Invalid or expired verification code.'
-            );
+            throw new RuntimeException('Invalid or expired verification code.');
         }
 
-        /* OTP Expiration */
+        $expiresTimestamp = strtotime($expiresAt);
 
-        $expiresTimestamp =
-            strtotime(
-                $expiresAt
-            );
-
-        if (
-            $expiresTimestamp === false ||
-            $expiresTimestamp <= time()
-        ) {
-
-            throw new RuntimeException(
-                'Verification code has expired.'
-            );
+        if ($expiresTimestamp === false || $expiresTimestamp <= time()) {
+            throw new RuntimeException('Verification code has expired.');
         }
 
-        /* OTP Hash */
+        /* Max Attempts Reached */
 
-        $otpHash =
-            hash(
-                'sha256',
-                $otp
-            );
+        if ((int) $otpAttempts >= (int) $otpMaxAttempts) {
+            throw new RuntimeException('Invalid or expired verification code.');
+        }
 
-        /* Constant Time Comparison */
+        /* OTP Hash (HMAC) */
 
-        $valid =
-            is_string($storedOtpHash) &&
-            hash_equals(
-                $storedOtpHash,
-                $otpHash
-            );
+$otpHash = hashOtp($otp);
 
-        /* Update OTP Attempts */
+$valid = is_string($storedOtpHash)
+    && hash_equals($storedOtpHash, $otpHash);
+        /* Increment Attempts */
 
-        $otpId =
-            (int) $otpId;
+        $otpId = (int) $otpId;
 
         $stmt = $conn->prepare(
             'UPDATE otp_codes
@@ -471,34 +355,19 @@ try {
         );
 
         if ($stmt === false) {
-            throw new RuntimeException(
-                'Unable to update OTP attempts.'
-            );
+            throw new RuntimeException('Unable to update OTP attempts.');
         }
 
-        $stmt->bind_param(
-            'i',
-            $otpId
-        );
+        $stmt->bind_param('i', $otpId);
 
         if (!$stmt->execute()) {
-
             $stmt->close();
-
-            throw new RuntimeException(
-                'Unable to update OTP attempts.'
-            );
+            throw new RuntimeException('Unable to update OTP attempts.');
         }
 
-        if (
-            $stmt->affected_rows !== 1
-        ) {
-
+        if ($stmt->affected_rows !== 1) {
             $stmt->close();
-
-            throw new RuntimeException(
-                'Unable to update OTP attempts.'
-            );
+            throw new RuntimeException('Unable to update OTP attempts.');
         }
 
         $stmt->close();
@@ -507,65 +376,39 @@ try {
 
         if (!$valid) {
 
-            $attempt =
-                recordOtpAttempt(
-                    $conn,
-                    $lockedEmail,
-                    $ipAddress,
-                    $otpSecurityPurpose
-                );
+            $attempt = recordOtpAttempt(
+                $conn,
+                $lockedEmail,
+                $ipAddress,
+                $otpSecurityPurpose
+            );
 
-            if (
-                !$conn->commit()
-            ) {
-                throw new RuntimeException(
-                    'Unable to save OTP attempt.'
-                );
+            if (!$conn->commit()) {
+                throw new RuntimeException('Unable to save OTP attempt.');
             }
 
-            securityLog(
-                'login_otp_failed',
-                $userId,
-                [
-                    'reason' =>
-                        'invalid_otp',
-
-                    'attempts' =>
-                        $attempt['attempts'],
-
-                    'remaining' =>
-                        $attempt['remaining'],
-                ]
-            );
+            securityLog('login_otp_failed', $userId, [
+                'reason'    => 'invalid_otp',
+                'attempts'  => $attempt['attempts'],
+                'remaining' => $attempt['remaining'],
+            ]);
 
             releaseRequestLock(
-                $conn,
-                'user',
-                (string) $userId,
-                'login-otp'
+                $conn, 'user', (string) $userId, 'login-otp'
             );
 
-            if (
-                $attempt['blocked']
-            ) {
-
+            if ($attempt['blocked']) {
                 errorResponse(
-                    'Too many OTP attempts. No OTP will be sent for the next 15 minutes.',
+                    'Too many OTP attempts. Try again later.',
                     429,
-                    [
-                        'retry_after' =>
-                            $attempt['retry_after'],
-                    ]
+                    ['retry_after' => $attempt['retry_after']]
                 );
             }
 
             errorResponse(
                 'Invalid verification code.',
                 401,
-                [
-                    'attempts_remaining' =>
-                        $attempt['remaining'],
-                ]
+                ['attempts_remaining' => $attempt['remaining']]
             );
         }
 
@@ -581,35 +424,19 @@ try {
         );
 
         if ($stmt === false) {
-            throw new RuntimeException(
-                'Unable to consume OTP.'
-            );
+            throw new RuntimeException('Unable to consume OTP.');
         }
 
-        $stmt->bind_param(
-            'ii',
-            $otpId,
-            $userId
-        );
+        $stmt->bind_param('ii', $otpId, $userId);
 
         if (!$stmt->execute()) {
-
             $stmt->close();
-
-            throw new RuntimeException(
-                'Unable to consume OTP.'
-            );
+            throw new RuntimeException('Unable to consume OTP.');
         }
 
-        if (
-            $stmt->affected_rows !== 1
-        ) {
-
+        if ($stmt->affected_rows !== 1) {
             $stmt->close();
-
-            throw new RuntimeException(
-                'OTP could not be consumed.'
-            );
+            throw new RuntimeException('OTP could not be consumed.');
         }
 
         $stmt->close();
@@ -623,63 +450,48 @@ try {
             $otpSecurityPurpose
         );
 
-        /* Generate Refresh Identifiers */
+        /* Refresh Identifiers */
 
-        $refreshJti =
-            generateUuidV4();
-
-        $familyId =
-            generateUuidV4();
+        $refreshJti = generateUuidV4();
+        $familyId   = generateUuidV4();
 
         /* Access Token */
 
-        $accessToken =
-            createAccessToken(
-                $userId
-            );
+        $accessToken = createAccessToken(
+            $userId,
+            (int) $lockedTokenVersion
+        );
 
         /* Refresh Token */
 
-        $refreshToken =
-            createRefreshToken(
-                $userId,
-                $refreshJti,
-                $familyId
-            );
+        $refreshToken = createRefreshToken(
+            $userId,
+            $refreshJti,
+            $familyId,
+            (int) $lockedTokenVersion
+        );
 
-        /* Refresh Expiration */
+        $refreshExpiresAt = time() + (int) $jwtConfig['refresh_ttl'];
 
-        global $jwtConfig;
+        $refreshTokenId = storeRefreshToken(
+            $conn,
+            $userId,
+            $refreshToken,
+            $refreshJti,
+            $familyId,
+            $refreshExpiresAt
+        );
 
-        $refreshExpiresAt =
-            time() +
-            (int) $jwtConfig['refresh_ttl'];
-
-        /* Store Refresh Session */
-
-        $refreshTokenId =
-            storeRefreshToken(
-                $conn,
-                $userId,
-                $refreshToken,
-                $refreshJti,
-                $familyId,
-                $refreshExpiresAt
-            );
-
-        if (
-            $refreshTokenId < 1
-        ) {
-            throw new RuntimeException(
-                'Unable to create refresh session.'
-            );
+        if ($refreshTokenId < 1) {
+            throw new RuntimeException('Unable to create refresh session.');
         }
 
-        /* Update Last Login */
+        /* Update Last Login + Clear Lock */
 
         $stmt = $conn->prepare(
             'UPDATE users
-             SET last_login_at = NOW()
+             SET last_login_at = NOW(),
+                 locked_until  = NULL
              WHERE id = ?
                AND status = "active"
                AND email_verified_at IS NOT NULL
@@ -687,31 +499,18 @@ try {
         );
 
         if ($stmt === false) {
-            throw new RuntimeException(
-                'Unable to update login time.'
-            );
+            throw new RuntimeException('Unable to update login time.');
         }
 
-        $stmt->bind_param(
-            'i',
-            $userId
-        );
+        $stmt->bind_param('i', $userId);
 
         if (!$stmt->execute()) {
-
             $stmt->close();
-
-            throw new RuntimeException(
-                'Unable to update login time.'
-            );
+            throw new RuntimeException('Unable to update login time.');
         }
 
-        if (
-            $stmt->affected_rows !== 1
-        ) {
-
+        if ($stmt->affected_rows !== 1) {
             $stmt->close();
-
             throw new RuntimeException(
                 'Login account state changed unexpectedly.'
             );
@@ -721,54 +520,36 @@ try {
 
         /* Commit */
 
-        if (
-            !$conn->commit()
-        ) {
-            throw new RuntimeException(
-                'Unable to complete login.'
-            );
+        if (!$conn->commit()) {
+            throw new RuntimeException('Unable to complete login.');
         }
 
-    } catch (
-        Throwable $e
-    ) {
+        /* Audit */
 
-        try {
-            $conn->rollback();
-        } catch (Throwable) {
-        }
+        securityLog('login_success', $userId);
+
+    } catch (Throwable $e) {
+
+        try { $conn->rollback(); } catch (Throwable) {}
 
         releaseRequestLock(
-            $conn,
-            'user',
-            (string) $userId,
-            'login-otp'
+            $conn, 'user', (string) $userId, 'login-otp'
         );
 
-        if (
-            $e->getMessage() ===
-            'OTP verification is temporarily blocked.'
-        ) {
+        if ($e->getMessage() === 'OTP verification is temporarily blocked.') {
 
-            $currentBlock =
-                checkOtpBlock(
-                    $conn,
-                    $email,
-                    $ipAddress,
-                    $otpSecurityPurpose
-                );
+            $currentBlock = checkOtpBlock(
+                $conn,
+                $email,
+                $ipAddress,
+                $otpSecurityPurpose
+            );
 
-            if (
-                $currentBlock['blocked']
-            ) {
-
+            if ($currentBlock['blocked']) {
                 errorResponse(
-                    'Too many OTP attempts. No OTP will be sent for the next 15 minutes.',
+                    'Too many OTP attempts. Try again later.',
                     429,
-                    [
-                        'retry_after' =>
-                            $currentBlock['retry_after'],
-                    ]
+                    ['retry_after' => $currentBlock['retry_after']]
                 );
             }
         }
@@ -788,43 +569,28 @@ try {
                 true
             )
         ) {
+            errorResponse($e->getMessage(), 401);
+        }
+
+        if (str_starts_with($e->getMessage(), 'Account temporarily locked.')) {
 
             errorResponse(
-                $e->getMessage(),
-                401
+                'Account temporarily locked. Try again later.',
+                423
             );
         }
 
-        securityLog(
-            'login_otp_verification_error',
-            $userId
-        );
+        securityLog('login_otp_verification_error', $userId);
 
-        error_log(
-            '[VERIFY_LOGIN_OTP] ' .
-            $e->getMessage()
-        );
+        error_log('[VERIFY_LOGIN_OTP] ' . $e->getMessage());
 
-        errorResponse(
-            'Unable to complete login.',
-            500
-        );
+        errorResponse('Unable to complete login.', 500);
     }
-
-    /* Audit */
-
-    securityLog(
-        'login_success',
-        $userId
-    );
 
     /* Release Lock */
 
     releaseRequestLock(
-        $conn,
-        'user',
-        (string) $userId,
-        'login-otp'
+        $conn, 'user', (string) $userId, 'login-otp'
     );
 
     /* Response */
@@ -832,60 +598,28 @@ try {
     successResponse(
         'Login successful.',
         [
-            'token_type' =>
-                'Bearer',
-
-            'access_token' =>
-                $accessToken,
-
-            'expires_in' =>
-                (int) $jwtConfig['access_ttl'],
-
-            'refresh_token' =>
-                $refreshToken,
-
-            'refresh_expires_in' =>
-                (int) $jwtConfig['refresh_ttl'],
-
+            'token_type'          => 'Bearer',
+            'access_token'        => $accessToken,
+            'expires_in'          => (int) $jwtConfig['access_ttl'],
+            'refresh_token'       => $refreshToken,
+            'refresh_expires_in'  => (int) $jwtConfig['refresh_ttl'],
             'user' => [
-                'id' =>
-                    $userId,
-
-                'name' =>
-                    $lockedName,
-
-                'email' =>
-                    $lockedEmail,
-
-                'role' =>
-                    $lockedRole,
-
-                'status' =>
-                    $lockedStatus,
+                'id'     => $userId,
+                'name'   => $lockedName,
+                'email'  => $lockedEmail,
+                'role'   => $lockedRole,
+                'status' => $lockedStatus,
             ],
         ]
     );
 
-} catch (
-    InvalidArgumentException $e
-) {
+} catch (InvalidArgumentException $e) {
 
-    errorResponse(
-        $e->getMessage(),
-        422
-    );
+    errorResponse($e->getMessage(), 422);
 
-} catch (
-    Throwable $e
-) {
+} catch (Throwable $e) {
 
-    error_log(
-        '[VERIFY_LOGIN_OTP] ' .
-        $e->getMessage()
-    );
+    error_log('[VERIFY_LOGIN_OTP] ' . $e->getMessage());
 
-    errorResponse(
-        'Unable to verify login.',
-        500
-    );
+    errorResponse('Unable to verify login.', 500);
 }

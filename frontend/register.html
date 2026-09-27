@@ -75,111 +75,124 @@
 
     </main>
 
-    <script>
-       
-    'use strict';
+<script>
+'use strict';
 
-    const form =
-        document.getElementById('registerForm');
+const form = document.getElementById('registerForm');
+const button = document.getElementById('registerBtn');
+const message = document.getElementById('message');
 
-    const button =
-        document.getElementById('registerBtn');
+form.addEventListener('submit', async function (event) {
 
-    const message =
-        document.getElementById('message');
+    event.preventDefault();
 
-    form.addEventListener(
-        'submit',
-        async function (event) {
+    button.disabled = true;
+    message.textContent = 'Creating account...';
 
-            event.preventDefault();
+    const name =
+        document.getElementById('name').value.trim();
 
-            button.disabled = true;
-            message.textContent =
-                'Creating account...';
+    const email =
+        document.getElementById('email').value.trim();
 
-            const name =
-                document.getElementById('name').value.trim();
+    const password =
+        document.getElementById('password').value;
 
-            const email =
-                document.getElementById('email').value.trim();
+    if (password.length < 8) {
+        message.textContent =
+            'Password must be at least 8 characters.';
 
-            const password =
-                document.getElementById('password').value;
+        button.disabled = false;
+        return;
+    }
 
-            if (password.length < 8) {
-                message.textContent =
-                    'Password must be at least 8 characters.';
+    try {
 
-                button.disabled = false;
+        const response = await fetch(
+            '/secure-jwt-auth/api/auth/register.php',
+            {
+                method: 'POST',
 
-                return;
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+
+                body: JSON.stringify({
+                    name: name,
+                    email: email,
+                    password: password
+                }),
+
+                cache: 'no-store'
             }
+        );
 
-            try {
+        /*
+         * IMPORTANT:
+         * Read response as TEXT first.
+         * This lets us see PHP errors instead of
+         * getting "Unexpected token '<'".
+         */
 
-                const response =
-                    await fetch(
-                        '/secure-jwt-auth/api/auth/register.php',
-                        {
-                            method: 'POST',
+        const rawResponse = await response.text();
 
-                            headers: {
-                                'Content-Type':
-                                    'application/json',
-                                'Accept':
-                                    'application/json'
-                            },
+        console.log('HTTP STATUS:', response.status);
+        console.log('RAW SERVER RESPONSE:');
+        console.log(rawResponse);
 
-                            body: JSON.stringify({
-                                name: name,
-                                email: email,
-                                password: password
-                            }),
+        let data;
 
-                            cache: 'no-store'
-                        }
-                    );
+        try {
+            data = JSON.parse(rawResponse);
+        } catch (jsonError) {
 
-                const data =
-                    await response.json();
+            console.error(
+                'SERVER RETURNED NON-JSON RESPONSE:',
+                rawResponse
+            );
 
-                if (!response.ok) {
-                    throw new Error(
-                        data.message ||
-                        'Registration failed.'
-                    );
-                }
-
-                sessionStorage.setItem(
-                    'verification_email',
-                    email
-                );
-
-                message.textContent =
-                    data.message ||
-                    'Registration successful.';
-
-                window.location.href =
-                    'verify-email.html';
-
-            } catch (error) {
-
-                console.error(
-                    'Registration Error:',
-                    error
-                );
-
-                message.textContent =
-                    error.message ||
-                    'Unable to register.';
-
-                button.disabled = false;
-            }
+            throw new Error(
+                'Server returned an invalid response. Check browser Console.'
+            );
         }
-    );
 
-    </script>
+        if (!response.ok) {
+
+            throw new Error(
+                data.message ||
+                'Registration failed.'
+            );
+        }
+
+        sessionStorage.setItem(
+            'verification_email',
+            email
+        );
+
+        message.textContent =
+            data.message ||
+            'Registration successful.';
+
+        window.location.href =
+            'verify-email.html';
+
+    } catch (error) {
+
+        console.error(
+            'Registration Error:',
+            error
+        );
+
+        message.textContent =
+            error.message ||
+            'Unable to register.';
+
+        button.disabled = false;
+    }
+});
+</script>
+
 
 </body>
 

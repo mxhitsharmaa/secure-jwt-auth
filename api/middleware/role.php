@@ -12,10 +12,10 @@ function requireRole(
 ): void {
 
     if (
-        !isset(
-            $tokenData->user,
-            $tokenData->user->role
-        )
+        !isset($tokenData->user) ||
+        !is_object($tokenData->user) ||
+        !isset($tokenData->user->role) ||
+        !is_string($tokenData->user->role)
     ) {
         errorResponse(
             'Authorization information is missing.',
@@ -23,22 +23,13 @@ function requireRole(
         );
     }
 
-    $roles = is_array(
-        $allowedRoles
-    )
+    $roles = is_array($allowedRoles)
         ? $allowedRoles
         : [$allowedRoles];
 
     $userRole = $tokenData->user->role;
 
-    if (
-        !is_string($userRole) ||
-        !in_array(
-            $userRole,
-            $roles,
-            true
-        )
-    ) {
+    if (!in_array($userRole, $roles, true)) {
         errorResponse(
             'You are not authorized to access this resource.',
             403
@@ -48,24 +39,14 @@ function requireRole(
 
 /* Require Admin */
 
-function requireAdmin(
-    object $tokenData
-): void {
-
-    requireRole(
-        $tokenData,
-        'admin'
-    );
+function requireAdmin(object $tokenData): void
+{
+    requireRole($tokenData, 'admin');
 }
 
 /* Require User */
 
-function requireUser(
-    object $tokenData
-): void {
-
-    requireRole(
-        $tokenData,
-        'user'
-    );
+function requireUser(object $tokenData): void
+{
+    requireRole($tokenData, 'user');
 }

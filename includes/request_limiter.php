@@ -17,70 +17,37 @@ function getRequestRateKey(
     );
 }
 
-/* Get current endpoint */
+/* Get current endpoint (path only, no query string) */
 
 function getCurrentEndpoint(): string
 {
-    $uri =
-        $_SERVER['REQUEST_URI'] ?? '/';
+    $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
-    $path =
-        parse_url(
-            $uri,
-            PHP_URL_PATH
-        );
+    $path = parse_url($uri, PHP_URL_PATH);
 
-    if (
-        !is_string($path) ||
-        $path === ''
-    ) {
+    if (!is_string($path) || $path === '') {
         return '/';
     }
 
-    return substr(
-        $path,
-        0,
-        255
-    );
+    return substr($path, 0, 255);
 }
 
 /* Send rate limit response */
 
-function sendRateLimitResponse(
-    int $retryAfter
-): never {
-    $retryAfter =
-        max(1, $retryAfter);
+function sendRateLimitResponse(int $retryAfter): never
+{
+    $retryAfter = max(1, $retryAfter);
 
-    header(
-        'Retry-After: ' .
-        $retryAfter
+    header('Retry-After: ' . $retryAfter);
+
+    errorResponse(
+        'Too many requests. Please try again later.',
+        429,
+        ['retry_after' => $retryAfter]
     );
-
-    header(
-        'Content-Type: application/json; charset=utf-8'
-    );
-
-    header(
-        'Cache-Control: no-store'
-    );
-
-    http_response_code(429);
-
-    echo json_encode(
-        [
-            'success' => false,
-            'message' =>
-                'Too many requests. Please try again later.',
-        ],
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES
-    );
-
-    exit;
 }
 
-/* Check request rate limit */
+/* Check request rate limit (atomic) */
 
 function checkRequestRateLimit(
     mysqli $conn,
@@ -91,48 +58,33 @@ function checkRequestRateLimit(
     int $windowSeconds = 60
 ): void {
 
-    if (
-        $maxRequests < 1 ||
-        $windowSeconds < 1
-    ) {
+    if ($maxRequests < 1 || $windowSeconds < 1) {
         throw new InvalidArgumentException(
             'Invalid rate limit configuration.'
         );
     }
 
-    $currentTime =
-        time();
+    $currentTime = time();
 
     $windowStartTimestamp =
-        intdiv(
-            $currentTime,
-            $windowSeconds
-        ) * $windowSeconds;
+        intdiv($currentTime, $windowSeconds) * $windowSeconds;
 
     $windowEndTimestamp =
-        $windowStartTimestamp +
-        $windowSeconds;
+        $windowStartTimestamp + $windowSeconds;
 
-    $windowStart =
-        date(
-            'Y-m-d H:i:s',
-            $windowStartTimestamp
-        );
+    $windowStart = date('Y-m-d H:i:s', $windowStartTimestamp);
+    $expiresAt   = date('Y-m-d H:i:s', $windowEndTimestamp);
 
-    $expiresAt =
-        date(
-            'Y-m-d H:i:s',
-            $windowEndTimestamp
-        );
+    $rateKey = getRequestRateKey($scope, $identifier, $endpoint);
 
-    $rateKey =
-        getRequestRateKey(
-            $scope,
-            $identifier,
-            $endpoint
-        );
+    /*
+      Atomic increment + read using LAST_INSERT_ID trick.
 
-    /* Atomic Counter */
+      INSERT ... ON DUPLICATE KEY UPDATE
+        request_count = LAST_INSERT_ID(request_count + 1)
+
+      makes $conn->insert_id return the NEW count.
+    */
 
     $sql = '
         INSERT INTO rate_limits
@@ -142,17 +94,14 @@ function checkRequestRateLimit(
             request_count,
             expires_at
         )
-        VALUES (?, ?, 1, ?)
+        VALUES (?, ?, LAST_INSERT_ID(1), ?)
 
         ON DUPLICATE KEY UPDATE
-            request_count =
-                request_count + 1,
-            expires_at =
-                VALUES(expires_at)
+            request_count = LAST_INSERT_ID(request_count + 1),
+            expires_at    = VALUES(expires_at)
     ';
 
-    $stmt =
-        $conn->prepare($sql);
+    $stmt = $conn->prepare($sql);
 
     if ($stmt === false) {
         throw new RuntimeException(
@@ -168,9 +117,7 @@ function checkRequestRateLimit(
     );
 
     if (!$stmt->execute()) {
-
         $stmt->close();
-
         throw new RuntimeException(
             'Unable to process rate limit.'
         );
@@ -178,84 +125,30 @@ function checkRequestRateLimit(
 
     $stmt->close();
 
-    /* Read Counter */
+    /* Atomic count read */
 
-    $stmt =
-        $conn->prepare(
-            'SELECT request_count
-             FROM rate_limits
-             WHERE rate_key = ?
-               AND window_start = ?
-             LIMIT 1'
-        );
+    $requestCount = (int) $conn->insert_id;
 
-    if ($stmt === false) {
+    if ($requestCount < 1) {
         throw new RuntimeException(
-            'Unable to read rate limit.'
+            'Rate limit counter is invalid.'
         );
     }
 
-    $stmt->bind_param(
-        'ss',
-        $rateKey,
-        $windowStart
-    );
+    if ($requestCount > $maxRequests) {
 
-    if (!$stmt->execute()) {
+        $retryAfter = max(1, $windowEndTimestamp - time());
 
-        $stmt->close();
-
-        throw new RuntimeException(
-            'Unable to read rate limit.'
-        );
-    }
-
-    $stmt->bind_result(
-        $requestCount
-    );
-
-    $found =
-        $stmt->fetch();
-
-    $stmt->close();
-
-    if (!$found) {
-        throw new RuntimeException(
-            'Rate limit record not found.'
-        );
-    }
-
-    /* Limit Exceeded */
-
-    if (
-        (int) $requestCount >
-        $maxRequests
-    ) {
-
-        $retryAfter =
-            max(
-                1,
-                $windowEndTimestamp -
-                time()
-            );
-
-        sendRateLimitResponse(
-            $retryAfter
-        );
+        sendRateLimitResponse($retryAfter);
     }
 }
 
 /* Apply global IP rate limit */
 
-function applyGlobalRateLimit(
-    mysqli $conn
-): void {
-
-    $ipAddress =
-        getClientIp();
-
-    $endpoint =
-        getCurrentEndpoint();
+function applyGlobalRateLimit(mysqli $conn): void
+{
+    $ipAddress = getClientIp();
+    $endpoint  = getCurrentEndpoint();
 
     checkRequestRateLimit(
         $conn,
@@ -302,13 +195,11 @@ function getRequestLockKey(
 ): string {
     return hash(
         'sha256',
-        $scope . '|' .
-        $identifier . '|' .
-        $operation
+        $scope . '|' . $identifier . '|' . $operation
     );
 }
 
-/* Acquire request lock */
+/* Acquire request lock (atomic) */
 
 function acquireRequestLock(
     mysqli $conn,
@@ -318,69 +209,35 @@ function acquireRequestLock(
     int $lockSeconds = 10
 ): void {
 
-    if (
-        $lockSeconds < 1 ||
-        $lockSeconds > 300
-    ) {
+    if ($lockSeconds < 1 || $lockSeconds > 300) {
         throw new InvalidArgumentException(
             'Invalid request lock duration.'
         );
     }
 
-    $lockKey =
-        getRequestLockKey(
-            $scope,
-            $identifier,
-            $operation
-        );
+    $lockKey = getRequestLockKey($scope, $identifier, $operation);
 
-    $expiresAt =
-        date(
-            'Y-m-d H:i:s',
-            time() + $lockSeconds
-        );
+    $expiresAt = date('Y-m-d H:i:s', time() + $lockSeconds);
 
-    /* Remove expired lock */
+    /*
+      Atomic replace: delete expired THEN insert.
 
-    $stmt =
-        $conn->prepare(
-            'DELETE FROM request_locks
-             WHERE lock_key = ?
-               AND expires_at <= NOW()'
-        );
+      Use INSERT ... ON DUPLICATE KEY UPDATE for atomicity.
+      If lock exists and is NOT expired, the update fails the WHERE clause.
+    */
 
-    if ($stmt === false) {
-        throw new RuntimeException(
-            'Unable to prepare expired lock cleanup.'
-        );
-    }
+    $stmt = $conn->prepare(
+        'INSERT INTO request_locks
+         (lock_key, expires_at)
+         VALUES (?, ?)
 
-    $stmt->bind_param(
-        's',
-        $lockKey
+         ON DUPLICATE KEY UPDATE
+             expires_at = IF(
+                 expires_at <= NOW(),
+                 VALUES(expires_at),
+                 expires_at
+             )'
     );
-
-    if (!$stmt->execute()) {
-        $stmt->close();
-
-        throw new RuntimeException(
-            'Unable to clean expired request lock.'
-        );
-    }
-
-    $stmt->close();
-
-    /* Create lock */
-
-    $stmt =
-        $conn->prepare(
-            'INSERT INTO request_locks
-            (
-                lock_key,
-                expires_at
-            )
-            VALUES (?, ?)'
-        );
 
     if ($stmt === false) {
         throw new RuntimeException(
@@ -388,32 +245,27 @@ function acquireRequestLock(
         );
     }
 
-    $stmt->bind_param(
-        'ss',
-        $lockKey,
-        $expiresAt
-    );
+    $stmt->bind_param('ss', $lockKey, $expiresAt);
 
-    if ($stmt->execute()) {
+    if (!$stmt->execute()) {
         $stmt->close();
-
-        return;
+        throw new RuntimeException(
+            'Unable to acquire request lock.'
+        );
     }
 
-    $errorCode =
-        $stmt->errno;
-
+    $affected = $stmt->affected_rows;
     $stmt->close();
 
-    /* Lock already exists */
+    /*
+      affected_rows == 1 → inserted (fresh lock)
+      affected_rows == 2 → updated (expired, replaced) — OK
+      affected_rows == 0 → duplicate found, still valid → lock held
+    */
 
-    if ($errorCode === 1062) {
+    if ($affected === 0) {
         sendRateLimitResponse(1);
     }
-
-    throw new RuntimeException(
-        'Unable to acquire request lock.'
-    );
 }
 
 /* Release request lock */
@@ -425,28 +277,17 @@ function releaseRequestLock(
     string $operation
 ): void {
 
-    $lockKey =
-        getRequestLockKey(
-            $scope,
-            $identifier,
-            $operation
-        );
+    $lockKey = getRequestLockKey($scope, $identifier, $operation);
 
-    $stmt =
-        $conn->prepare(
-            'DELETE FROM request_locks
-             WHERE lock_key = ?'
-        );
+    $stmt = $conn->prepare(
+        'DELETE FROM request_locks WHERE lock_key = ?'
+    );
 
     if ($stmt === false) {
         return;
     }
 
-    $stmt->bind_param(
-        's',
-        $lockKey
-    );
-
+    $stmt->bind_param('s', $lockKey);
     $stmt->execute();
     $stmt->close();
 }

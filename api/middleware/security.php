@@ -17,32 +17,16 @@ function applyApiSecurity(): void
     /* Allowed HTTP Methods */
 
     $allowedMethods = [
-        'GET',
-        'POST',
-        'PUT',
-        'PATCH',
-        'DELETE',
-        'OPTIONS',
+        'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS',
     ];
 
-    $method =
-        $_SERVER['REQUEST_METHOD'] ?? '';
+    $method = $_SERVER['REQUEST_METHOD'] ?? '';
 
-    if (
-        !in_array(
-            $method,
-            $allowedMethods,
-            true
-        )
-    ) {
-        header(
-            'Allow: GET, POST, PUT, PATCH, DELETE, OPTIONS'
-        );
+    if (!in_array($method, $allowedMethods, true)) {
 
-        errorResponse(
-            'HTTP method not allowed.',
-            405
-        );
+        header('Allow: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+
+        errorResponse('HTTP method not allowed.', 405);
     }
 
     /* Security Headers */
@@ -51,28 +35,19 @@ function applyApiSecurity(): void
         $securityConfig['headers']
         as $header => $value
     ) {
-        header(
-            "{$header}: {$value}"
-        );
+        header("{$header}: {$value}");
     }
 
     /* Request Body Size */
 
-    $contentLength =
-        $_SERVER['CONTENT_LENGTH'] ?? null;
+    $contentLength = $_SERVER['CONTENT_LENGTH'] ?? null;
 
     if (
         $contentLength !== null &&
-        ctype_digit(
-            (string) $contentLength
-        ) &&
-        (int) $contentLength >
-        1024 * 1024
+        ctype_digit((string) $contentLength) &&
+        (int) $contentLength > 1024 * 1024
     ) {
-        errorResponse(
-            'Request body is too large.',
-            413
-        );
+        errorResponse('Request body is too large.', 413);
     }
 
     /* JSON Content-Type */
@@ -80,22 +55,14 @@ function applyApiSecurity(): void
     if (
         in_array(
             $method,
-            [
-                'POST',
-                'PUT',
-                'PATCH',
-            ],
+            ['POST', 'PUT', 'PATCH'],
             true
         )
     ) {
-        $contentType =
-            $_SERVER['CONTENT_TYPE'] ?? '';
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
 
         if (
-            stripos(
-                $contentType,
-                'application/json'
-            ) === false
+            stripos($contentType, 'application/json') === false
         ) {
             errorResponse(
                 'Content-Type must be application/json.',
@@ -106,12 +73,8 @@ function applyApiSecurity(): void
 
     /* Global Rate Limit */
 
-    if (
-        $method !== 'OPTIONS'
-    ) {
-        applyGlobalRateLimit(
-            $conn
-        );
+    if ($method !== 'OPTIONS') {
+        applyGlobalRateLimit($conn);
     }
 }
 
@@ -124,24 +87,45 @@ function requireSecureConnection(): void
     /* Local Development */
 
     if (
-        $appConfig['environment'] ===
-        'local'
+        ($appConfig['environment'] ?? 'local') === 'local'
     ) {
         return;
     }
 
-    /* HTTPS Detection */
+    /* HTTPS Detection — direct + reverse proxy */
 
-    $https =
-        $_SERVER['HTTPS'] ?? '';
+    $https = $_SERVER['HTTPS'] ?? '';
 
-    if (
-        $https === '' ||
-        strtolower($https) === 'off'
-    ) {
-        errorResponse(
-            'HTTPS connection required.',
-            403
+    $isHttps =
+        ($https !== '' && strtolower($https) !== 'off');
+
+    /* Reverse proxy support (only trust if configured) */
+
+    if (!$isHttps) {
+
+        $trustedProxies = $_ENV['TRUSTED_PROXIES'] ?? '';
+
+        $trustedProxies = array_filter(
+            array_map('trim', explode(',', $trustedProxies))
         );
+
+        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
+
+        if (
+            $remoteAddr !== '' &&
+            in_array($remoteAddr, $trustedProxies, true)
+        ) {
+
+            $forwardedProto =
+                $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
+
+            if (strtolower($forwardedProto) === 'https') {
+                $isHttps = true;
+            }
+        }
+    }
+
+    if (!$isHttps) {
+        errorResponse('HTTPS connection required.', 403);
     }
 }

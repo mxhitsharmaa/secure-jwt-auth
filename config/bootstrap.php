@@ -3,32 +3,62 @@
 declare(strict_types=1);
 
 /*
- Secure JWT Auth - Bootstrap
- Loads environment variables and application configuration.
+  Secure JWT Auth - Bootstrap
+  Loads environment variables and application configuration.
 */
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Dotenv\Dotenv;
 
-// Load .env
+/* -------------------------------------------------
+   Load .env
+------------------------------------------------- */
+
 $dotenv = Dotenv::createImmutable(__DIR__ . '/..');
 $dotenv->safeLoad();
 
-// Apply CORS policy and handle browser preflight requests before API execution.
-require_once __DIR__ . '/cors.php';
+/* -------------------------------------------------
+   Required Environment Variables
+------------------------------------------------- */
 
-// Set timezone
+$dotenv->required([
+    'DB_HOST',
+    'DB_DATABASE',
+    'DB_USERNAME',
+    
+    'JWT_SECRET',
+])->notEmpty();
+
+/* -------------------------------------------------
+   CORS (must run before anything else)
+------------------------------------------------- */
+
+try {
+    require_once __DIR__ . '/cors.php';
+} catch (Throwable $e) {
+    error_log('[BOOTSTRAP][CORS] ' . $e->getMessage());
+    http_response_code(500);
+    exit;
+}
+
+/* -------------------------------------------------
+   Timezone
+------------------------------------------------- */
+
 date_default_timezone_set('Asia/Kolkata');
 
-// Prevent PHP from exposing unnecessary information
-ini_set('expose_php', '0');
+/* -------------------------------------------------
+   Configurations
+------------------------------------------------- */
 
-// Load configurations
-$appConfig = require __DIR__ . '/app.php';
-$jwtConfig = require __DIR__ . '/jwt.php';
-$mailConfig = require __DIR__ . '/mail.php';
+$appConfig      = require __DIR__ . '/app.php';
+$jwtConfig      = require __DIR__ . '/jwt.php';
+$mailConfig     = require __DIR__ . '/mail.php';
 $securityConfig = require __DIR__ . '/security.php';
 
-// Database connection
+/* -------------------------------------------------
+   Database
+------------------------------------------------- */
+
 require_once __DIR__ . '/database.php';

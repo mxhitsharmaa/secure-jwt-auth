@@ -1,41 +1,35 @@
 <?php
 
-declare(strict_types=1);
+$host = 'localhost';
+$port = 3306;
+$database = 'auth';
+$username = 'root';
+$password = '';
 
-require_once __DIR__ . '/../vendor/autoload.php';
+mysqli_report(MYSQLI_REPORT_OFF);
 
-use Dotenv\Dotenv;
-
-// Load environment variables
-$dotenv = Dotenv::createImmutable(__DIR__ . '/..');
-$dotenv->safeLoad();
-
-// Database configuration
-$host = $_ENV['DB_HOST'] ?? 'localhost';
-$port = $_ENV['DB_PORT'] ?? '3306';
-$database = $_ENV['DB_DATABASE'] ?? '';
-$username = $_ENV['DB_USERNAME'] ?? '';
-$password = $_ENV['DB_PASSWORD'] ?? '';
-
-if ($database === '' || $username === '') {
-    throw new RuntimeException('Database configuration is incomplete.');
-}
-
-// Create MySQL connection
 $conn = new mysqli(
     $host,
     $username,
     $password,
     $database,
-    (int) $port
+    $port
 );
 
-// Check connection
 if ($conn->connect_errno) {
-    throw new RuntimeException(
-        'Database connection failed.'
-    );
+
+    http_response_code(500);
+
+    header('Content-Type: application/json; charset=UTF-8');
+
+    echo json_encode([
+        'success' => false,
+        'message' => 'Database connection failed.',
+        'mysql_error' => $conn->connect_error,
+        'mysql_errno' => $conn->connect_errno
+    ]);
+
+    exit;
 }
 
-// UTF-8 support
 $conn->set_charset('utf8mb4');

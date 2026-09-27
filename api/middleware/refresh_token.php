@@ -6,18 +6,24 @@ require_once __DIR__ . '/../../config/bootstrap.php';
 
 /* Hash refresh token */
 
-function hashRefreshToken(
-    string $token
-): string {
+function hashRefreshToken(string $token): string
+{
     if ($token === '') {
         throw new InvalidArgumentException(
             'Refresh token is required.'
         );
     }
 
-    return hash(
-        'sha256',
-        $token
+    return hash('sha256', $token);
+}
+
+/* Validate UUID v4 */
+
+function isValidUuidV4(string $uuid): bool
+{
+    return (bool) preg_match(
+        '/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i',
+        $uuid
     );
 }
 
@@ -34,31 +40,15 @@ function storeRefreshToken(
 ): int {
 
     if ($userId < 1) {
-        throw new InvalidArgumentException(
-            'Invalid user ID.'
-        );
+        throw new InvalidArgumentException('Invalid user ID.');
     }
 
-    if (
-        !preg_match(
-            '/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i',
-            $jti
-        )
-    ) {
-        throw new InvalidArgumentException(
-            'Invalid refresh token JTI.'
-        );
+    if (!isValidUuidV4($jti)) {
+        throw new InvalidArgumentException('Invalid refresh token JTI.');
     }
 
-    if (
-        !preg_match(
-            '/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i',
-            $familyId
-        )
-    ) {
-        throw new InvalidArgumentException(
-            'Invalid refresh token family ID.'
-        );
+    if (!isValidUuidV4($familyId)) {
+        throw new InvalidArgumentException('Invalid refresh token family ID.');
     }
 
     if ($expiresAt <= time()) {
@@ -67,77 +57,88 @@ function storeRefreshToken(
         );
     }
 
-    $tokenHash =
-        hashRefreshToken($token);
+    if ($parentId !== null && $parentId < 1) {
+        throw new InvalidArgumentException('Invalid parent token ID.');
+    }
 
-    $ipAddress =
-        $_SERVER['REMOTE_ADDR'] ?? null;
+    $tokenHash = hashRefreshToken($token);
+
+    $ipAddress = $_SERVER['REMOTE_ADDR'] ?? null;
 
     if (
-        $ipAddress !== null &&
-        !filter_var(
-            $ipAddress,
-            FILTER_VALIDATE_IP
-        )
+        !is_string($ipAddress) ||
+        !filter_var($ipAddress, FILTER_VALIDATE_IP)
     ) {
         $ipAddress = null;
     }
 
-    $userAgent =
-        $_SERVER['HTTP_USER_AGENT'] ?? null;
+    $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
 
-    if ($userAgent !== null) {
-        $userAgent =
-            substr(
-                $userAgent,
-                0,
-                500
+    if (is_string($userAgent)) {
+        $userAgent = substr($userAgent, 0, 500);
+    } else {
+        $userAgent = null;
+    }
+
+    $expiresAtDate = date('Y-m-d H:i:s', $expiresAt);
+
+    if ($parentId === null) {
+
+        $stmt = $conn->prepare(
+            'INSERT INTO refresh_tokens
+             (user_id, token_hash, jti, family_id, parent_id,
+              expires_at, ip_address, user_agent)
+             VALUES (?, ?, ?, ?, NULL, ?, ?, ?)'
+        );
+
+        if ($stmt === false) {
+            throw new RuntimeException(
+                'Unable to prepare refresh token statement.'
             );
-    }
+        }
 
-    $expiresAtDate =
-        date(
-            'Y-m-d H:i:s',
-            $expiresAt
+        $stmt->bind_param(
+            'issssss',
+            $userId,
+            $tokenHash,
+            $jti,
+            $familyId,
+            $expiresAtDate,
+            $ipAddress,
+            $userAgent
         );
 
-    $stmt = $conn->prepare(
-        'INSERT INTO refresh_tokens
-        (
-            user_id,
-            token_hash,
-            jti,
-            family_id,
-            parent_id,
-            expires_at,
-            ip_address,
-            user_agent
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    );
+    } else {
 
-    if ($stmt === false) {
-        throw new RuntimeException(
-            'Unable to prepare refresh token statement.'
+        $stmt = $conn->prepare(
+            'INSERT INTO refresh_tokens
+             (user_id, token_hash, jti, family_id, parent_id,
+              expires_at, ip_address, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+
+        if ($stmt === false) {
+            throw new RuntimeException(
+                'Unable to prepare refresh token statement.'
+            );
+        }
+
+        $stmt->bind_param(
+            'isssisss',
+            $userId,
+            $tokenHash,
+            $jti,
+            $familyId,
+            $parentId,
+            $expiresAtDate,
+            $ipAddress,
+            $userAgent
         );
     }
-
-    $stmt->bind_param(
-        'isssisss',
-        $userId,
-        $tokenHash,
-        $jti,
-        $familyId,
-        $parentId,
-        $expiresAtDate,
-        $ipAddress,
-        $userAgent
-    );
 
     if (!$stmt->execute()) {
-        $errorCode =
-            $stmt->errno;
 
+        $errorCode = $stmt->errno;
         $stmt->close();
 
         if ($errorCode === 1062) {
@@ -151,10 +152,14 @@ function storeRefreshToken(
         );
     }
 
-    $insertedId =
-        (int) $conn->insert_id;
-
+    $insertedId = (int) $conn->insert_id;
     $stmt->close();
+
+    if ($insertedId < 1) {
+        throw new RuntimeException(
+            'Unable to store refresh token.'
+        );
+    }
 
     return $insertedId;
 }
@@ -167,25 +172,14 @@ function findRefreshToken(
     bool $forUpdate = false
 ): ?array {
 
-    $tokenHash =
-        hashRefreshToken($token);
+    $tokenHash = hashRefreshToken($token);
 
     $sql = '
         SELECT
-            id,
-            user_id,
-            token_hash,
-            jti,
-            family_id,
-            parent_id,
-            expires_at,
-            revoked_at,
-            replaced_by_id,
-            reuse_detected_at,
-            ip_address,
-            user_agent,
-            created_at,
-            last_used_at
+            id, user_id, token_hash, jti, family_id,
+            parent_id, expires_at, revoked_at,
+            replaced_by_id, reuse_detected_at,
+            ip_address, user_agent, created_at, last_used_at
         FROM refresh_tokens
         WHERE token_hash = ?
         LIMIT 1
@@ -195,8 +189,7 @@ function findRefreshToken(
         $sql .= ' FOR UPDATE';
     }
 
-    $stmt =
-        $conn->prepare($sql);
+    $stmt = $conn->prepare($sql);
 
     if ($stmt === false) {
         throw new RuntimeException(
@@ -204,31 +197,23 @@ function findRefreshToken(
         );
     }
 
-    $stmt->bind_param(
-        's',
-        $tokenHash
-    );
+    $stmt->bind_param('s', $tokenHash);
 
     if (!$stmt->execute()) {
         $stmt->close();
-
         throw new RuntimeException(
             'Unable to lookup refresh token.'
         );
     }
 
-    $result =
-        $stmt->get_result();
-
-    $tokenData =
-        $result->fetch_assoc();
-
+    $result    = $stmt->get_result();
+    $tokenData = $result->fetch_assoc();
     $stmt->close();
 
     return $tokenData ?: null;
 }
 
-/* Revoke refresh token */
+/* Revoke refresh token (FIXED null handling) */
 
 function revokeRefreshToken(
     mysqli $conn,
@@ -242,45 +227,52 @@ function revokeRefreshToken(
         );
     }
 
-    if (
-        $replacedById !== null &&
-        $replacedById < 1
-    ) {
+    if ($replacedById !== null && $replacedById < 1) {
         throw new InvalidArgumentException(
             'Invalid replacement token ID.'
         );
     }
 
-    $stmt = $conn->prepare(
-        'UPDATE refresh_tokens
-         SET revoked_at = COALESCE(
-                 revoked_at,
-                 NOW()
-             ),
-             replaced_by_id = COALESCE(
-                 ?,
-                 replaced_by_id
-             )
-         WHERE id = ?
-           AND revoked_at IS NULL
-         LIMIT 1'
-    );
+    if ($replacedById === null) {
 
-    if ($stmt === false) {
-        throw new RuntimeException(
-            'Unable to prepare token revocation.'
+        $stmt = $conn->prepare(
+            'UPDATE refresh_tokens
+             SET revoked_at = COALESCE(revoked_at, NOW())
+             WHERE id = ?
+               AND revoked_at IS NULL
+             LIMIT 1'
         );
-    }
 
-    $stmt->bind_param(
-        'ii',
-        $replacedById,
-        $tokenId
-    );
+        if ($stmt === false) {
+            throw new RuntimeException(
+                'Unable to prepare token revocation.'
+            );
+        }
+
+        $stmt->bind_param('i', $tokenId);
+
+    } else {
+
+        $stmt = $conn->prepare(
+            'UPDATE refresh_tokens
+             SET revoked_at = COALESCE(revoked_at, NOW()),
+                 replaced_by_id = COALESCE(replaced_by_id, ?)
+             WHERE id = ?
+               AND revoked_at IS NULL
+             LIMIT 1'
+        );
+
+        if ($stmt === false) {
+            throw new RuntimeException(
+                'Unable to prepare token revocation.'
+            );
+        }
+
+        $stmt->bind_param('ii', $replacedById, $tokenId);
+    }
 
     if (!$stmt->execute()) {
         $stmt->close();
-
         throw new RuntimeException(
             'Unable to revoke refresh token.'
         );
@@ -297,12 +289,7 @@ function revokeRefreshTokenFamily(
     bool $reuseDetected = false
 ): void {
 
-    if (
-        !preg_match(
-            '/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i',
-            $familyId
-        )
-    ) {
+    if (!isValidUuidV4($familyId)) {
         throw new InvalidArgumentException(
             'Invalid refresh token family ID.'
         );
@@ -312,14 +299,8 @@ function revokeRefreshTokenFamily(
 
         $stmt = $conn->prepare(
             'UPDATE refresh_tokens
-             SET revoked_at = COALESCE(
-                     revoked_at,
-                     NOW()
-                 ),
-                 reuse_detected_at = COALESCE(
-                     reuse_detected_at,
-                     NOW()
-                 )
+             SET revoked_at = COALESCE(revoked_at, NOW()),
+                 reuse_detected_at = COALESCE(reuse_detected_at, NOW())
              WHERE family_id = ?'
         );
 
@@ -327,10 +308,7 @@ function revokeRefreshTokenFamily(
 
         $stmt = $conn->prepare(
             'UPDATE refresh_tokens
-             SET revoked_at = COALESCE(
-                     revoked_at,
-                     NOW()
-                 )
+             SET revoked_at = COALESCE(revoked_at, NOW())
              WHERE family_id = ?'
         );
     }
@@ -341,14 +319,10 @@ function revokeRefreshTokenFamily(
         );
     }
 
-    $stmt->bind_param(
-        's',
-        $familyId
-    );
+    $stmt->bind_param('s', $familyId);
 
     if (!$stmt->execute()) {
         $stmt->close();
-
         throw new RuntimeException(
             'Unable to revoke refresh token family.'
         );
@@ -394,22 +368,13 @@ function detectRefreshTokenReuse(
 
 /* Check refresh token expiration */
 
-function isRefreshTokenExpired(
-    array $tokenData
-): bool {
-
-    if (
-        !isset(
-            $tokenData['expires_at']
-        )
-    ) {
+function isRefreshTokenExpired(array $tokenData): bool
+{
+    if (!isset($tokenData['expires_at'])) {
         return true;
     }
 
-    $expiresAt =
-        strtotime(
-            $tokenData['expires_at']
-        );
+    $expiresAt = strtotime($tokenData['expires_at']);
 
     if ($expiresAt === false) {
         return true;
@@ -420,24 +385,18 @@ function isRefreshTokenExpired(
 
 /* Check refresh token revoked */
 
-function isRefreshTokenRevoked(
-    array $tokenData
-): bool {
-    return
-        isset($tokenData['revoked_at']) &&
-        $tokenData['revoked_at'] !== null;
+function isRefreshTokenRevoked(array $tokenData): bool
+{
+    return isset($tokenData['revoked_at'])
+        && $tokenData['revoked_at'] !== null;
 }
 
 /* Check reuse detection */
 
-function isRefreshTokenReuseDetected(
-    array $tokenData
-): bool {
-    return
-        isset(
-            $tokenData['reuse_detected_at']
-        ) &&
-        $tokenData['reuse_detected_at'] !== null;
+function isRefreshTokenReuseDetected(array $tokenData): bool
+{
+    return isset($tokenData['reuse_detected_at'])
+        && $tokenData['reuse_detected_at'] !== null;
 }
 
 /* Revoke all user refresh tokens */
@@ -448,17 +407,12 @@ function revokeAllUserRefreshTokens(
 ): void {
 
     if ($userId < 1) {
-        throw new InvalidArgumentException(
-            'Invalid user ID.'
-        );
+        throw new InvalidArgumentException('Invalid user ID.');
     }
 
     $stmt = $conn->prepare(
         'UPDATE refresh_tokens
-         SET revoked_at = COALESCE(
-                 revoked_at,
-                 NOW()
-             )
+         SET revoked_at = COALESCE(revoked_at, NOW())
          WHERE user_id = ?
            AND revoked_at IS NULL'
     );
@@ -469,14 +423,10 @@ function revokeAllUserRefreshTokens(
         );
     }
 
-    $stmt->bind_param(
-        'i',
-        $userId
-    );
+    $stmt->bind_param('i', $userId);
 
     if (!$stmt->execute()) {
         $stmt->close();
-
         throw new RuntimeException(
             'Unable to revoke all refresh sessions.'
         );

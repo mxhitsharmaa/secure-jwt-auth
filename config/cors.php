@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
-/* Allowed origins */
+/* -------------------------------------------------
+   Allowed Origins
+------------------------------------------------- */
 
 $allowedOrigins = array_values(
     array_filter(
@@ -16,55 +18,58 @@ $allowedOrigins = array_values(
     )
 );
 
-/* Request origin */
+/* Fail-safe: local development mein default allow karo */
 
-$requestOrigin =
-    $_SERVER['HTTP_ORIGIN'] ?? '';
+if (
+    $allowedOrigins === [] &&
+    ($_ENV['APP_ENV'] ?? 'local') !== 'production'
+) {
+    $allowedOrigins = [
+        'http://localhost',
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://127.0.0.1',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:5173',
+    ];
+}
 
-/* Validate origin */
+/* -------------------------------------------------
+   Request Origin
+------------------------------------------------- */
+
+$requestOrigin = $_SERVER['HTTP_ORIGIN'] ?? '';
+
+/* -------------------------------------------------
+   Validate Origin
+------------------------------------------------- */
 
 if ($requestOrigin !== '') {
 
-    if (
-        !in_array(
-            $requestOrigin,
-            $allowedOrigins,
-            true
-        )
-    ) {
-        http_response_code(403);
+    if (!in_array($requestOrigin, $allowedOrigins, true)) {
 
-        header(
-            'Content-Type: application/json; charset=utf-8'
-        );
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
 
         echo json_encode(
             [
                 'success' => false,
-                'message' =>
-                    'Origin is not allowed.',
+                'message' => 'Origin is not allowed.',
             ],
-            JSON_UNESCAPED_UNICODE |
-            JSON_UNESCAPED_SLASHES
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
         );
 
         exit;
     }
 
-    /* CORS headers */
+    /* CORS Headers */
 
-    header(
-        'Access-Control-Allow-Origin: ' .
-        $requestOrigin
-    );
-
-    header(
-        'Access-Control-Allow-Credentials: true'
-    );
+    header('Access-Control-Allow-Origin: ' . $requestOrigin);
+    header('Access-Control-Allow-Credentials: true');
 
     header(
         'Access-Control-Allow-Headers: ' .
-        'Content-Type, Authorization, X-Requested-With'
+        'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-Token'
     );
 
     header(
@@ -72,60 +77,43 @@ if ($requestOrigin !== '') {
         'GET, POST, PUT, PATCH, DELETE, OPTIONS'
     );
 
-    header(
-        'Access-Control-Max-Age: 600'
-    );
-
-    header(
-        'Vary: Origin'
-    );
+    header('Access-Control-Max-Age: 600');
 }
 
-/* Security headers */
+/* Vary: Origin hamesha set karo (cache poisoning se bachne ke liye) */
 
-header(
-    'X-Content-Type-Options: nosniff'
-);
+header('Vary: Origin');
 
-header(
-    'X-Frame-Options: DENY'
-);
+/* -------------------------------------------------
+   Security Headers
+------------------------------------------------- */
 
-header(
-    'Referrer-Policy: no-referrer'
-);
-
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('Referrer-Policy: no-referrer');
 header(
     'Permissions-Policy: ' .
     'geolocation=(), microphone=(), camera=()'
 );
+header('Cache-Control: no-store');
+header('Pragma: no-cache');
 
-header(
-    'Cache-Control: no-store'
-);
+/* -------------------------------------------------
+   Production HSTS
+------------------------------------------------- */
 
-header(
-    'Pragma: no-cache'
-);
-
-/* Production HSTS */
-
-if (
-    ($_ENV['APP_ENV'] ?? 'local') ===
-    'production'
-) {
+if (($_ENV['APP_ENV'] ?? 'local') === 'production') {
     header(
         'Strict-Transport-Security: ' .
         'max-age=31536000; includeSubDomains'
     );
 }
 
-/* Preflight */
+/* -------------------------------------------------
+   Preflight
+------------------------------------------------- */
 
-if (
-    ($_SERVER['REQUEST_METHOD'] ?? '') ===
-    'OPTIONS'
-) {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
     http_response_code(204);
     exit;
 }

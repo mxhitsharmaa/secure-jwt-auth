@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /* Validate required string */
 
 function validateRequiredString(
@@ -8,14 +10,14 @@ function validateRequiredString(
     int $minLength = 1,
     int $maxLength = 255
 ): string {
+
     if (!is_string($value)) {
         throw new InvalidArgumentException(
             "{$field} must be a string."
         );
     }
 
-    $value = trim($value);
-
+    $value  = trim($value);
     $length = mb_strlen($value);
 
     if ($length < $minLength) {
@@ -40,26 +42,20 @@ function validateName(
     int $minLength = 2,
     int $maxLength = 100
 ): string {
+
     if (!is_string($name)) {
-        throw new InvalidArgumentException(
-            'Name must be a string.'
-        );
+        throw new InvalidArgumentException('Name must be a string.');
     }
 
-    $name = trim($name);
-
+    $name   = trim($name);
     $length = mb_strlen($name);
 
     if ($length < $minLength) {
-        throw new InvalidArgumentException(
-            'Name is too short.'
-        );
+        throw new InvalidArgumentException('Name is too short.');
     }
 
     if ($length > $maxLength) {
-        throw new InvalidArgumentException(
-            'Name is too long.'
-        );
+        throw new InvalidArgumentException('Name is too long.');
     }
 
     if (
@@ -78,47 +74,44 @@ function validateName(
 
 /* Validate email */
 
-function validateEmail(
-    mixed $email
-): string {
+function validateEmail(mixed $email): string
+{
     if (!is_string($email)) {
-        throw new InvalidArgumentException(
-            'Email must be a string.'
-        );
+        throw new InvalidArgumentException('Email must be a string.');
     }
 
-    $email = trim(
-        strtolower($email)
-    );
+    $email = trim($email);
 
     if (
         $email === '' ||
         strlen($email) > 255 ||
-        !filter_var(
-            $email,
-            FILTER_VALIDATE_EMAIL
-        )
+        !filter_var($email, FILTER_VALIDATE_EMAIL)
     ) {
         throw new InvalidArgumentException(
             'Invalid email address.'
         );
     }
 
-    return $email;
+    return strtolower($email);
 }
 
-/* Validate password */
+/* Validate password (register) */
 
 function validatePassword(
     mixed $password,
     int $minLength = 8,
     int $maxLength = 72
 ): string {
+
     if (!is_string($password)) {
-        throw new InvalidArgumentException(
-            'Password must be a string.'
-        );
+        throw new InvalidArgumentException('Password must be a string.');
     }
+
+    /*
+      Do NOT trim passwords — spaces are valid characters.
+
+      Note: bcrypt truncates at 72 bytes, so max_length is essential.
+    */
 
     $length = strlen($password);
 
@@ -137,28 +130,23 @@ function validatePassword(
     return $password;
 }
 
-/* Validate login password */
+/* Validate login password (no min length — only non-empty + max) */
 
 function validateLoginPassword(
     mixed $password,
     int $maxLength = 72
 ): string {
+
     if (!is_string($password)) {
-        throw new InvalidArgumentException(
-            'Password must be a string.'
-        );
+        throw new InvalidArgumentException('Password must be a string.');
     }
 
     if ($password === '') {
-        throw new InvalidArgumentException(
-            'Password is required.'
-        );
+        throw new InvalidArgumentException('Password is required.');
     }
 
     if (strlen($password) > $maxLength) {
-        throw new InvalidArgumentException(
-            'Password is too long.'
-        );
+        throw new InvalidArgumentException('Password is too long.');
     }
 
     return $password;
@@ -166,23 +154,16 @@ function validateLoginPassword(
 
 /* Validate positive integer ID */
 
-function validateId(
-    mixed $id
-): int {
+function validateId(mixed $id): int
+{
     if (
         filter_var(
             $id,
             FILTER_VALIDATE_INT,
-            [
-                'options' => [
-                    'min_range' => 1,
-                ],
-            ]
+            ['options' => ['min_range' => 1]]
         ) === false
     ) {
-        throw new InvalidArgumentException(
-            'Invalid ID.'
-        );
+        throw new InvalidArgumentException('Invalid ID.');
     }
 
     return (int) $id;
@@ -194,22 +175,16 @@ function validateOtp(
     mixed $otp,
     int $length = 6
 ): string {
+
     if (!is_string($otp)) {
-        throw new InvalidArgumentException(
-            'OTP must be a string.'
-        );
+        throw new InvalidArgumentException('OTP must be a string.');
     }
 
     if (
         strlen($otp) !== $length ||
-        !preg_match(
-            '/^\d{' . $length . '}$/',
-            $otp
-        )
+        !preg_match('/^\d{' . $length . '}$/', $otp)
     ) {
-        throw new InvalidArgumentException(
-            'Invalid OTP.'
-        );
+        throw new InvalidArgumentException('Invalid OTP.');
     }
 
     return $otp;
@@ -219,31 +194,39 @@ function validateOtp(
 
 function getJsonInput(): array
 {
-    $contentType =
-        $_SERVER['CONTENT_TYPE'] ?? '';
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
 
     if (
-        stripos(
-            $contentType,
-            'application/json'
-        ) === false
+        stripos($contentType, 'application/json') === false
     ) {
         throw new InvalidArgumentException(
             'Content-Type must be application/json.'
         );
     }
 
-    $rawInput =
-        file_get_contents(
-            'php://input'
-        );
+    /*
+      Check content length early.
+    */
 
-    if (
-        $rawInput === false ||
-        trim($rawInput) === ''
-    ) {
+    $contentLength = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+
+    if ($contentLength > 1024 * 1024) { // 1 MB
+        throw new InvalidArgumentException(
+            'Request body is too large.'
+        );
+    }
+
+    $rawInput = file_get_contents('php://input');
+
+    if ($rawInput === false || trim($rawInput) === '') {
         throw new InvalidArgumentException(
             'Request body is required.'
+        );
+    }
+
+    if (strlen($rawInput) > 1024 * 1024) {
+        throw new InvalidArgumentException(
+            'Request body is too large.'
         );
     }
 
@@ -278,11 +261,11 @@ function validateAllowedFields(
     array $input,
     array $allowedFields
 ): void {
-    $unknownFields =
-        array_diff(
-            array_keys($input),
-            $allowedFields
-        );
+
+    $unknownFields = array_diff(
+        array_keys($input),
+        $allowedFields
+    );
 
     if ($unknownFields !== []) {
         throw new InvalidArgumentException(

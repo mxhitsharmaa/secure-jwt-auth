@@ -24,9 +24,8 @@ try {
        Request Method
     ------------------------------------------------- */
 
-    if (
-        ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST'
-    ) {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+
         header('Allow: POST');
 
         errorResponse(
@@ -396,11 +395,6 @@ try {
 
 
         $role = 'user';
-
-        /*
-         * Account remains pending until email OTP
-         * verification is completed.
-         */
         $status = 'pending';
 
 
@@ -477,8 +471,7 @@ try {
             'registration_failed',
             null,
             [
-                'reason' =>
-                    'registration_transaction_failed'
+                'reason' => 'registration_transaction_failed'
             ]
         );
 

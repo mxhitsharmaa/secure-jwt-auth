@@ -419,11 +419,10 @@ try {
 
         /* Hash OTP */
 
-        $otpHash =
-            hash(
-                'sha256',
-                $otp
-            );
+       $otpHash =
+    hashOtp(
+        $otp
+    );
 
         /* Constant Time Comparison */
 

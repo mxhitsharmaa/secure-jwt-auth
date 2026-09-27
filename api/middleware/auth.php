@@ -19,17 +19,11 @@ function authenticateRequest(): object
 
     /* Authorization header */
 
-    $authorization =
-        $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+    $authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 
     if ($authorization === '') {
-        errorResponse(
-            'Authentication required.',
-            401
-        );
+        errorResponse('Authentication required.', 401);
     }
-
-    /* Bearer token */
 
     if (
         !preg_match(
@@ -38,19 +32,13 @@ function authenticateRequest(): object
             $matches
         )
     ) {
-        errorResponse(
-            'Invalid authorization header.',
-            401
-        );
+        errorResponse('Invalid authorization header.', 401);
     }
 
     $token = $matches[1];
 
     if ($token === '') {
-        errorResponse(
-            'Access token is required.',
-            401
-        );
+        errorResponse('Access token is required.', 401);
     }
 
     /* Decode JWT */
@@ -64,19 +52,12 @@ function authenticateRequest(): object
             )
         );
     } catch (Throwable) {
-        errorResponse(
-            'Invalid or expired access token.',
-            401
-        );
+        errorResponse('Invalid or expired access token.', 401);
     }
 
     /* Clock skew */
 
-    $clockSkew =
-        (int) (
-            $securityConfig['jwt']['clock_skew']
-            ?? 30
-        );
+    $clockSkew = (int) ($securityConfig['jwt']['clock_skew'] ?? 30);
 
     if ($clockSkew < 0) {
         $clockSkew = 0;
@@ -99,25 +80,16 @@ function authenticateRequest(): object
             $decoded->token_version
         )
     ) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
     /* Issuer */
 
     if (
         !is_string($decoded->iss) ||
-        !hash_equals(
-            $jwtConfig['issuer'],
-            $decoded->iss
-        )
+        !hash_equals($jwtConfig['issuer'], $decoded->iss)
     ) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
     /* Audience */
@@ -125,111 +97,66 @@ function authenticateRequest(): object
     $audienceValid = false;
 
     if (is_string($decoded->aud)) {
-
-        $audienceValid =
-            hash_equals(
-                $jwtConfig['audience'],
-                $decoded->aud
-            );
-
+        $audienceValid = hash_equals(
+            $jwtConfig['audience'],
+            $decoded->aud
+        );
     } elseif (is_array($decoded->aud)) {
-
         foreach ($decoded->aud as $audience) {
-
             if (
                 is_string($audience) &&
-                hash_equals(
-                    $jwtConfig['audience'],
-                    $audience
-                )
+                hash_equals($jwtConfig['audience'], $audience)
             ) {
                 $audienceValid = true;
-
                 break;
             }
         }
     }
 
     if (!$audienceValid) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
     /* Expiration */
 
     if (!is_numeric($decoded->exp)) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
-    $expiration =
-        (int) $decoded->exp;
+    $expiration = (int) $decoded->exp;
 
-    if (
-        $expiration <=
-        ($currentTime - $clockSkew)
-    ) {
-        errorResponse(
-            'Access token has expired.',
-            401
-        );
+    if ($expiration <= ($currentTime - $clockSkew)) {
+        errorResponse('Access token has expired.', 401);
     }
 
     /* Issued at */
 
     if (!is_numeric($decoded->iat)) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
-    $issuedAt =
-        (int) $decoded->iat;
+    $issuedAt = (int) $decoded->iat;
 
-    if (
-        $issuedAt >
-        ($currentTime + $clockSkew)
-    ) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+    if ($issuedAt > ($currentTime + $clockSkew)) {
+        errorResponse('Invalid access token.', 401);
     }
 
     /* Not before */
 
     if (!is_numeric($decoded->nbf)) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
-    $notBefore =
-        (int) $decoded->nbf;
+    $notBefore = (int) $decoded->nbf;
 
-    if (
-        $notBefore >
-        ($currentTime + $clockSkew)
-    ) {
-        errorResponse(
-            'Access token is not active yet.',
-            401
-        );
+    if ($notBefore > ($currentTime + $clockSkew)) {
+        errorResponse('Access token is not active yet.', 401);
     }
 
     /* Token lifetime sanity */
 
     if ($expiration <= $issuedAt) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
     /* Token type */
@@ -238,33 +165,19 @@ function authenticateRequest(): object
         !is_string($decoded->type) ||
         $decoded->type !== 'access'
     ) {
-        errorResponse(
-            'Access token required.',
-            401
-        );
+        errorResponse('Access token required.', 401);
     }
 
     /* Token version */
 
-    if (
-        !is_numeric(
-            $decoded->token_version
-        )
-    ) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+    if (!is_numeric($decoded->token_version)) {
+        errorResponse('Invalid access token.', 401);
     }
 
-    $tokenVersion =
-        (int) $decoded->token_version;
+    $tokenVersion = (int) $decoded->token_version;
 
     if ($tokenVersion < 1) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
     /* User ID */
@@ -274,14 +187,10 @@ function authenticateRequest(): object
         !ctype_digit($decoded->sub) ||
         (int) $decoded->sub < 1
     ) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
-    $userId =
-        (int) $decoded->sub;
+    $userId = (int) $decoded->sub;
 
     /* JTI */
 
@@ -292,120 +201,83 @@ function authenticateRequest(): object
             $decoded->jti
         )
     ) {
-        errorResponse(
-            'Invalid access token.',
-            401
-        );
+        errorResponse('Invalid access token.', 401);
     }
 
-    /* User */
+    /* User (with locked_until) */
 
     $stmt = $conn->prepare(
         'SELECT
-            id,
-            name,
-            email,
-            role,
-            status,
-            token_version,
-            email_verified_at
+            id, name, email, role, status,
+            token_version, email_verified_at, locked_until
          FROM users
          WHERE id = ?
          LIMIT 1'
     );
 
     if ($stmt === false) {
-        errorResponse(
-            'Unable to verify account.',
-            500
-        );
+        errorResponse('Unable to verify account.', 500);
     }
 
-    $stmt->bind_param(
-        'i',
-        $userId
-    );
+    $stmt->bind_param('i', $userId);
 
     if (!$stmt->execute()) {
         $stmt->close();
-
-        errorResponse(
-            'Unable to verify account.',
-            500
-        );
+        errorResponse('Unable to verify account.', 500);
     }
 
-    $result =
-        $stmt->get_result();
-
-    $user =
-        $result->fetch_assoc();
-
+    $result = $stmt->get_result();
+    $user   = $result->fetch_assoc();
     $stmt->close();
 
-    /* User no longer exists */
-
     if ($user === null) {
-        errorResponse(
-            'Account is no longer available.',
-            401
-        );
+        errorResponse('Account is no longer available.', 401);
     }
 
     /* Token version */
 
     if (
-        (int) $user['token_version'] !==
-        $tokenVersion
+        (int) $user['token_version'] !== $tokenVersion
     ) {
-        errorResponse(
-            'Access token has been revoked.',
-            401
-        );
+        errorResponse('Access token has been revoked.', 401);
     }
 
-    /* Blocked account */
+    /* Account locked */
 
-    if (
-        $user['status'] === 'blocked'
-    ) {
-        errorResponse(
-            'Account is blocked.',
-            403
-        );
+    if ($user['locked_until'] !== null) {
+
+        $lockedUntilTs = strtotime($user['locked_until']);
+
+        if ($lockedUntilTs !== false && $lockedUntilTs > time()) {
+
+            $retryAfter = $lockedUntilTs - time();
+
+            errorResponse(
+                'Account temporarily locked. Try again later.',
+                423,
+                ['retry_after' => $retryAfter]
+            );
+        }
     }
 
-    /* Suspended account */
+    /* Blocked / Suspended / Active */
 
-    if (
-        $user['status'] === 'suspended'
-    ) {
-        errorResponse(
-            'Account is suspended.',
-            403
-        );
+    if ($user['status'] === 'blocked') {
+        errorResponse('Account is blocked.', 403);
     }
 
-    /* Active account */
+    if ($user['status'] === 'suspended') {
+        errorResponse('Account is suspended.', 403);
+    }
 
-    if (
-        $user['status'] !== 'active'
-    ) {
-        errorResponse(
-            'Account is not active.',
-            403
-        );
+    if ($user['status'] !== 'active') {
+        errorResponse('Account is not active.', 403);
     }
 
     /* Email verification */
 
-    if (
-        $user['email_verified_at'] === null
-    ) {
-        errorResponse(
-            'Email verification is required.',
-            403
-        );
+    if ($user['email_verified_at'] === null) {
+        errorResponse('Email verification is required.', 403);
     }
 
     /* User Rate Limit */
@@ -418,26 +290,15 @@ function authenticateRequest(): object
         60
     );
 
-    /* Attach user */
+    /* Attach user (object, not array) */
 
-    $decoded->user = [
-        'id' =>
-            (int) $user['id'],
-
-        'name' =>
-            $user['name'],
-
-        'email' =>
-            $user['email'],
-
-        'role' =>
-            $user['role'],
-
-        'status' =>
-            $user['status'],
-
-        'token_version' =>
-            (int) $user['token_version'],
+    $decoded->user = (object) [
+        'id'            => (int) $user['id'],
+        'name'          => $user['name'],
+        'email'         => $user['email'],
+        'role'          => $user['role'],
+        'status'        => $user['status'],
+        'token_version' => (int) $user['token_version'],
     ];
 
     return $decoded;
